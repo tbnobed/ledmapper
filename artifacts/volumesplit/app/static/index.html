@@ -274,7 +274,7 @@ function drawPreview(){
     pctx.fillStyle=TINT[n];pctx.font="600 10px ui-monospace,monospace";
     pctx.fillText(n.toUpperCase()+"  "+r.w+"x"+r.h,r.x*k+8,r.y*k+16);
   }
-  if(P.grid==="on"){
+  if(P.grid){
     pctx.strokeStyle="rgba(0,255,80,0.55)";pctx.lineWidth=1;
     for(const n of CFG.order){
       const r=b[n];
