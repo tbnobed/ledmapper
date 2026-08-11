@@ -9,6 +9,9 @@ services:
       VS_DATA: /data
       VS_WORKERS: "1"          # ffmpeg saturates cores; raise only with headroom
       FAL_KEY: "${FAL_KEY:-}"  # fal.ai API key for AI plate generation (put it in .env)
+      # encode tuning — read at container start, restart to apply (no rebuild)
+      VS_ENCODE_THREADS: "${VS_ENCODE_THREADS:-10}"   # x264 threads per output encoder
+      VS_FILTER_THREADS: "${VS_FILTER_THREADS:-16}"   # unwrap/blend graph threads
     volumes:
       - vs-data:/data
       # bind-mount your plate storage to pull sources straight off the share:
@@ -16,7 +19,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8G
+          # must leave real headroom over peak encode memory — the 8G cap
+          # here is what was OOM-killing full-canvas encodes (exit -9)
+          # even though the VM had free RAM
+          memory: 18G
     tmpfs:
       - /tmp:size=2g
 

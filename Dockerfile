@@ -14,6 +14,8 @@ COPY artifacts/volumesplit/app ./app
 
 ENV VS_DATA=/data \
     VS_WORKERS=1 \
+    VS_ENCODE_THREADS=4 \
+    VS_FILTER_THREADS=8 \
     PYTHONUNBUFFERED=1
 
 RUN mkdir -p /data/uploads /data/jobs
