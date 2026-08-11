@@ -27,6 +27,13 @@ SIZES = {
     "canvas": (4096, 1024),
 }
 
+# AI upscale pass after generation: reconstructs real texture instead of the
+# soft blur plain resampling gives when the plate is stretched to wall res.
+# Factors chosen so the result meets or beats the wall's native pixel count
+# (center wall 6144 wide, full canvas 11264 wide).
+UPSCALE_URL = "https://fal.run/fal-ai/clarity-upscaler"
+UPSCALE_FACTOR = {"center": 2, "canvas": 3}
+
 
 def generate_plate(prompt: str, target: str = "center") -> bytes:
     key = os.environ.get("FAL_KEY", "").strip()
@@ -59,12 +66,39 @@ def generate_plate(prompt: str, target: str = "center") -> bytes:
     imgs = d.get("images") or []
     if not imgs or not imgs[0].get("url"):
         raise RuntimeError("Model returned no image.")
+    src_url = imgs[0]["url"]
 
-    with urllib.request.urlopen(imgs[0]["url"], timeout=180) as r:
+    # upscale from the fal-hosted URL — no re-upload needed. If the
+    # upscaler fails we keep the raw plate rather than losing a paid
+    # generation; the caller surfaces upscale_error to the operator.
+    upscale_error = None
+    fetch_url = src_url
+    try:
+        fetch_url = upscale_image(src_url, UPSCALE_FACTOR.get(target, 2))
+    except Exception as e:
+        upscale_error = str(e)[:300]
+
+    with urllib.request.urlopen(fetch_url, timeout=300) as r:
         data = r.read()
     if not data:
         raise RuntimeError("Downloaded image was empty.")
-    return data
+    return data, upscale_error
+
+
+def upscale_image(image_url: str, factor: int) -> str:
+    """Run the clarity upscaler on a hosted image; returns the result URL.
+    creativity kept low / resemblance high: sharpen and add texture, do not
+    reinvent the composition."""
+    d = _fal_json(UPSCALE_URL, {
+        "image_url": image_url,
+        "upscale_factor": factor,
+        "creativity": 0.2,
+        "resemblance": 0.8,
+    }, timeout=600)
+    url = (d.get("image") or {}).get("url")
+    if not url:
+        raise RuntimeError("Upscaler returned no image.")
+    return url
 
 
 # ------------------------------------------------------------- animation ----
@@ -78,14 +112,15 @@ def _key() -> str:
     return key
 
 
-def _fal_json(url: str, payload: dict | None = None) -> dict:
+def _fal_json(url: str, payload: dict | None = None,
+              timeout: int = 120) -> dict:
     body = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, data=body, headers={
         "Authorization": f"Key {_key()}",
         "Content-Type": "application/json",
     })
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf8", "replace")[:300]

@@ -124,7 +124,7 @@ def generate(body: GenIn):
     if body.target not in G.SIZES:
         raise HTTPException(400, "Unknown target.")
     try:
-        data = G.generate_plate(prompt, body.target)
+        data, upscale_error = G.generate_plate(prompt, body.target)
     except RuntimeError as e:
         raise HTTPException(502, str(e))
 
@@ -140,7 +140,9 @@ def generate(body: GenIn):
 
     name = "AI - " + (prompt[:48] + ("…" if len(prompt) > 48 else ""))
     meta.update({"id": sid, "name": name, "ext": ext, "generated": True,
-                 "prompt": prompt})
+                 "prompt": prompt, "upscaled": upscale_error is None})
+    if upscale_error:
+        meta["upscale_error"] = upscale_error
     (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
     return meta
 
