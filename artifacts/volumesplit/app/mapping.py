@@ -313,7 +313,11 @@ CODECS = {
     "dnxhr":  {"args": ["-c:v", "dnxhd", "-profile:v", "dnxhr_hq",
                         "-pix_fmt", "yuv422p"],
                "ext": "mov", "label": "DNxHR HQ", "note": "10-bit, CPU decode"},
+    # rc-lookahead/ref trimmed: at 6144x2560 the x264 defaults buffer ~40
+    # frames per encoder (~1 GB each, two encoders per job) — the difference
+    # between finishing and the OOM killer on a modest Docker host.
     "h264":   {"args": ["-c:v", "libx264", "-crf", "18", "-preset", "fast",
+                        "-x264-params", "rc-lookahead=12:ref=2:threads=4",
                         "-pix_fmt", "yuv420p"],
                "ext": "mp4", "label": "H.264 (preview only)",
                "note": "most decoders cap below 6144 wide"},
