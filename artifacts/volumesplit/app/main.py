@@ -198,6 +198,7 @@ def animate_status(rid: str):
     dest = J.UPLOADS / f"{sid}.mp4"
     dest.write_bytes(res["data"])
     try:
+        J.make_loopable(dest)           # crossfade tail into head — seamless loop
         meta = J.probe(dest)
     except Exception as e:
         dest.unlink(missing_ok=True)

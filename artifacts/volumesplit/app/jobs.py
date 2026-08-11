@@ -150,6 +150,37 @@ def render_preview(sid: str, p: M.Params, timecode: float = 0.0,
     return r.stdout
 
 
+def make_loopable(path: Path, fade: float = 1.0) -> None:
+    """Crossfade the tail of a clip into its head so it loops seamlessly.
+
+    Output is `fade` seconds shorter: the last `fade` seconds are blended
+    over the first `fade` seconds, so the final frame leads exactly back
+    to the first. In-place, atomic replace. No-op for stills/short clips.
+    """
+    meta = probe(path)
+    dur = meta.get("duration", 0)
+    fps = meta.get("fps") or 24
+    if meta.get("kind") != "video" or dur <= fade * 2.5:
+        return
+    body = dur - fade
+    # fps= is required: trim leaves an unknown frame rate and xfade insists on CFR
+    fc = (f"[0:v]trim=0:{body},setpts=PTS-STARTPTS,fps={fps}[main];"
+          f"[0:v]trim={body},setpts=PTS-STARTPTS,fps={fps}[tail];"
+          f"[tail][main]xfade=transition=fade:duration={fade * 0.9}:offset=0[v]")
+    tmp = path.with_name(f".{path.stem}.loop{path.suffix}")
+    r = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(path),
+         "-filter_complex", fc, "-map", "[v]",
+         "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+         "-pix_fmt", "yuv420p", "-an", str(tmp)],
+        capture_output=True, timeout=600)
+    if r.returncode != 0 or not tmp.exists():
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError("Loop pass failed: " +
+                           r.stderr.decode("utf8", "replace")[-300:])
+    os.replace(tmp, path)
+
+
 # ------------------------------------------------------------------- jobs ----
 
 @dataclass
