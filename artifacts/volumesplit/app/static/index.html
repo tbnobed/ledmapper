@@ -217,6 +217,7 @@ let TC=0;
 const $=id=>document.getElementById(id);
 const pv=$("pv"), pctx=pv.getContext("2d");
 const TINT={left:"#4FA3C7",center:"#E8A33D",right:"#C77B4F"};
+const CAB=256; // cabinet pixel pitch — must match mapping.py
 
 function toast(m){const t=$("toast");t.textContent=m;t.classList.add("on");
   clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("on"),5200);}
@@ -272,6 +273,22 @@ function drawPreview(){
     pctx.strokeRect(r.x*k+.75,r.y*k+.75,r.w*k-1.5,r.h*k-1.5);
     pctx.fillStyle=TINT[n];pctx.font="600 10px ui-monospace,monospace";
     pctx.fillText(n.toUpperCase()+"  "+r.w+"x"+r.h,r.x*k+8,r.y*k+16);
+  }
+  if(P.grid==="on"){
+    pctx.strokeStyle="rgba(0,255,80,0.55)";pctx.lineWidth=1;
+    for(const n of CFG.order){
+      const r=b[n];
+      pctx.save();pctx.beginPath();pctx.rect(r.x*k,r.y*k,r.w*k,r.h*k);pctx.clip();
+      for(let gx=CAB;gx<r.w;gx+=CAB){
+        const px=Math.round((r.x+gx)*k)+.5;
+        pctx.beginPath();pctx.moveTo(px,r.y*k);pctx.lineTo(px,(r.y+r.h)*k);pctx.stroke();
+      }
+      for(let gy=CAB;gy<r.h;gy+=CAB){
+        const py=Math.round((r.y+gy)*k)+.5;
+        pctx.beginPath();pctx.moveTo(r.x*k,py);pctx.lineTo((r.x+r.w)*k,py);pctx.stroke();
+      }
+      pctx.restore();
+    }
   }
   let deck=0;for(const n of CFG.order){deck=Math.max(deck,b[n].y+b[n].h);}
   deck*=k;
