@@ -494,8 +494,9 @@ def _run(j: Job):
     # cap filter-graph threading: on a many-core host each filter thread can
     # buffer a full-canvas frame (~86 MB in gbrp) — 30 cores of that plus two
     # encoders is how a 24 GB box hits the OOM killer mid-encode
+    ft = os.environ.get("VS_FILTER_THREADS", "8")
     cmd = ["ffmpeg", "-hide_banner", "-nostats", "-y",
-           "-filter_complex_threads", "8", "-filter_threads", "8",
+           "-filter_complex_threads", ft, "-filter_threads", ft,
            "-progress", "pipe:1", "-loglevel", "warning"]
 
     trim_start = enc.get("trim_start")

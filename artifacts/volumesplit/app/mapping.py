@@ -7,6 +7,7 @@ ffmpeg with the same graph, so there is only one thing to get right.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Tuple
 
@@ -316,8 +317,12 @@ CODECS = {
     # rc-lookahead/ref trimmed: at 6144x2560 the x264 defaults buffer ~40
     # frames per encoder (~1 GB each, two encoders per job) — the difference
     # between finishing and the OOM killer on a modest Docker host.
+    # VS_ENCODE_THREADS raises the per-encoder thread cap on hosts with
+    # dedicated cores and RAM headroom (each x264 thread buffers frames).
     "h264":   {"args": ["-c:v", "libx264", "-crf", "18", "-preset", "fast",
-                        "-x264-params", "rc-lookahead=12:ref=2:threads=4",
+                        "-x264-params",
+                        "rc-lookahead=12:ref=2:threads="
+                        + os.environ.get("VS_ENCODE_THREADS", "4"),
                         "-pix_fmt", "yuv420p"],
                "ext": "mp4", "label": "H.264 (preview only)",
                "note": "most decoders cap below 6144 wide"},
