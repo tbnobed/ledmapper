@@ -124,6 +124,7 @@ class Job:
     encode: dict
     status: str = "queued"          # queued running done failed cancelled
     progress: float = 0.0
+    frames_done: int = 0
     created: float = field(default_factory=time.time)
     started: Optional[float] = None
     finished: Optional[float] = None
@@ -158,7 +159,7 @@ def load_jobs():
             d = json.loads(jd.read_text())
             j = Job(id=d["id"], source_id=d["source_id"], params=d["params"],
                     encode=d["encode"])
-            for k in ("status", "progress", "created", "started", "finished",
+            for k in ("status", "progress", "frames_done", "created", "started", "finished",
                       "outputs", "error", "source_name"):
                 if k in d:
                     setattr(j, k, d[k])
@@ -290,11 +291,14 @@ def _run(j: Job):
 
     last = 0.0
     for line in iter(proc.stdout.readline, b""):
-        m = TIME_RE.search(line)
-        if m and total_us:
-            j.progress = min(0.99, int(m.group(1)) / total_us)
-        elif FRAME_RE.search(line) and not total_us:
+        tm = TIME_RE.search(line)
+        fm = FRAME_RE.search(line)
+        if tm and total_us:
+            j.progress = min(0.99, int(tm.group(1)) / total_us)
+        elif fm and not total_us:
             j.progress = 0.5
+        if fm:
+            j.frames_done = int(fm.group(1))
         if time.time() - last > 0.5:
             last = time.time()
             j.save()

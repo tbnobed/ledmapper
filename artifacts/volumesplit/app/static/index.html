@@ -364,10 +364,24 @@ async function refreshJobs(){
         return '<a href="/api/jobs/'+j.id+'/files/'+o.name+'" download>'+o.label+' '+o.w+'x'+o.h+'</a>';
       }).join("");
       const zip=j.status==="done"?'<a href="/api/jobs/'+j.id+'/zip" download>ZIP</a>':"";
+      const pct=Math.round(j.progress*100);
+      let progressDetail="";
+      if(j.status==="running"){
+        let detail=pct+"%";
+        if(j.frames_done>0) detail+=" \u00b7 "+j.frames_done+" fr";
+        if(j.progress>0.01 && j.elapsed>0){
+          const eta=Math.round(j.elapsed/j.progress*(1-j.progress));
+          detail+=" \u00b7 ~"+eta+"s left";
+        }
+        progressDetail=' <span style="color:var(--cyan);font-family:var(--mono);font-size:9.5px">'+detail+'</span>';
+      }
+      const statusLabel=j.status==="running"
+        ?'<span class="st running">running</span>'
+        :'<span class="st '+j.status+'">'+j.status+'</span>';
       d.innerHTML='<div class="top"><span class="nm">'+(j.source_name||j.id)+'</span>'+
-        '<span class="st '+j.status+'">'+j.status+'</span></div>'+
-        '<div class="bar"><i style="width:'+Math.round(j.progress*100)+'%"></i></div>'+
-        '<div class="meta">'+(j.encode.codec||j.encode.image_format)+' - '+j.params.mode+' - '+j.elapsed+'s</div>'+
+        statusLabel+'</div>'+
+        '<div class="bar"><i style="width:'+pct+'%"></i></div>'+
+        '<div class="meta">'+(j.encode.codec||j.encode.image_format)+' \u00b7 '+j.params.mode+' \u00b7 '+j.elapsed+'s'+progressDetail+'</div>'+
         ((links||zip)?'<div class="links">'+links+zip+'</div>':"")+
         (j.error?'<div class="err">'+j.error.replace(/[<>]/g,"")+'</div>':"");
       wrap.appendChild(d);
