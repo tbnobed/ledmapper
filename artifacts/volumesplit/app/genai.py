@@ -94,26 +94,41 @@ def _fal_json(url: str, payload: dict | None = None) -> dict:
         raise RuntimeError(f"Could not reach fal.ai: {e.reason}")
 
 
-def submit_animation(prompt: str, image_data: bytes, mime: str,
-                     duration: int = 5) -> str:
-    """Queue an image-to-video job on fal. Returns the fal request id.
+def _black_png(w: int = 1344, h: int = 576) -> bytes:
+    """A pure black PNG built with stdlib only (start/end frame for overlays)."""
+    import struct, zlib
 
-    The plate goes up as a data URI so this works without a public URL —
-    required for the Docker deployment behind a private network.
-    Camera is locked: plates must not drift behind the actors.
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + tag + data +
+                struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)   # 8-bit grayscale
+    raw = zlib.compress(b"".join(b"\x00" * (w + 1) for _ in range(h)), 9)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) +
+            chunk(b"IDAT", raw) + chunk(b"IEND", b""))
+
+
+def submit_overlay(prompt: str, duration: int = 5) -> str:
+    """Queue generation of an ambient OVERLAY layer: particles on pure black.
+
+    The plate itself never goes through the video model (which would cap it
+    at 1080p). Instead the model animates bright elements on a black frame;
+    the app screen-blends the result over the full-resolution plate in
+    ffmpeg. Start and end frames are both black, so the layer fades in/out
+    of nothing — a mathematically clean loop.
     """
-    uri = f"data:{mime};base64," + base64.b64encode(image_data).decode()
+    uri = "data:image/png;base64," + base64.b64encode(_black_png()).decode()
     d = _fal_json(f"{FAL_QUEUE}/{ANIMATE_MODEL}", {
-        "prompt": ("Locked-off static camera. Keep the composition, framing, "
-                   "subjects and lighting exactly as in the reference image. "
-                   "The only change is: " + prompt),
+        "prompt": ("A pure black background — no scenery, no objects, no "
+                   "people, no light sources, no gradients. The only visible "
+                   "content is bright ambient atmosphere floating against "
+                   "the black void, filling the whole frame edge to edge: "
+                   + prompt +
+                   ". Locked-off static camera, elements drift gently."),
         "image_url": uri,
-        "end_image_url": uri,       # end on the start frame: kills composition
-                                    # drift and makes the loop seam exact
+        "end_image_url": uri,       # fade in from black, fade out to black
         "resolution": "1080p",
-        # "auto" collapses to ~square on our extreme wide plates; 21:9 is the
-        # widest the model accepts and closest to the 2.4:1 center wall
-        "aspect_ratio": "21:9",
+        "aspect_ratio": "21:9",     # matches the 2.4:1 center wall closely
         "duration": str(duration),
         "camera_fixed": True,
     })

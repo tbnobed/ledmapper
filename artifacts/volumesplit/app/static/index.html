@@ -161,7 +161,8 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
       <option value="canvas">Canvas 4:1</option>
     </select>
     <button class="btn sm" id="btnGen">Generate</button>
-    <button class="btn sm" id="btnAnimate" title="Animate the selected still plate with this motion prompt (dust, flares, atmosphere). Camera stays locked.">Animate</button>
+    <button class="btn sm" id="btnAnimate" title="Generate an ambient layer (dust, flares, atmosphere) and blend it over the selected still. The plate itself stays at full resolution.">Add layer</button>
+    <button class="btn sm hidden" id="btnRmLayer" title="Remove the ambient layer from this plate">Remove layer</button>
   </div>
 
   <div class="drop" id="drop" tabindex="0" role="button">
@@ -317,12 +318,15 @@ function updateReadout(){
   e.textContent=up.toFixed(2)+"x";
   e.className="v "+(up>3?"warn":"ok");
   $("rUpNote").textContent=up>3?"soft at 1.9mm":"within tolerance";
-  if(SRC.kind==="video"){
-    $("rDur").textContent=SRC.duration.toFixed(1)+"s";
-    $("rFps").textContent=SRC.fps+" fps";
+  const ov=SRC.kind!=="video"&&SRC.overlay;
+  if(SRC.kind==="video"||ov){
+    const dur=ov?SRC.overlay.duration:SRC.duration;
+    const sfps=ov?SRC.overlay.fps:SRC.fps;
+    $("rDur").textContent=dur.toFixed(1)+"s"+(ov?" loop":"");
+    $("rFps").textContent=sfps+" fps"+(ov?" · still + layer":"");
     const mbpf=({hapq:2.1,hap:1.1,prores:3.4,dnxhr:2.6,h264:0.25})[ENC.codec]||2;
-    const rate=parseFloat($("fps").value)||SRC.fps||30;
-    $("rSize").textContent=(mbpf*SRC.duration*rate*1.45/1024).toFixed(1)+" GB";
+    const rate=parseFloat($("fps").value)||sfps||30;
+    $("rSize").textContent=(mbpf*dur*rate*1.45/1024).toFixed(1)+" GB";
     $("rSizeNote").textContent=Math.round(mbpf*rate*1.45)+" MB/s playback";
   }else{
     $("rDur").textContent="still";$("rFps").textContent="";
@@ -339,7 +343,7 @@ async function loadSources(sel){
   for(const m of SOURCES){
     const o=document.createElement("option");
     o.value=m.id;
-    o.textContent=m.name+"  -  "+m.width+"x"+m.height+"  "+(m.kind==="video"?m.fps+"fps":"still");
+    o.textContent=m.name+"  -  "+m.width+"x"+m.height+"  "+(m.kind==="video"?m.fps+"fps":(m.overlay?"still + layer":"still"));
     s.appendChild(o);
   }
   if(sel)s.value=sel;
@@ -354,14 +358,18 @@ function pickSource(id){
   $("btnRun").disabled=!has;
   if(!has){tally(null,"Idle");return;}
   const isVid=SRC.kind==="video";
-  $("scrubRow").classList.toggle("hidden",!isVid);
-  $("fieldCodec").classList.toggle("hidden",!isVid);
-  $("fieldRate").classList.toggle("hidden",!isVid);
-  $("fieldTrim").classList.toggle("hidden",!isVid);
-  $("fieldImgFmt").classList.toggle("hidden",isVid);
-  if(isVid){
-    $("tc").max=Math.max(0.1,SRC.duration);
-    $("tc").step=Math.max(0.01,SRC.duration/500);
+  const hasOvl=!isVid&&!!SRC.overlay;
+  const moving=isVid||hasOvl;          // still + ambient layer encodes as video
+  $("scrubRow").classList.toggle("hidden",!moving);
+  $("fieldCodec").classList.toggle("hidden",!moving);
+  $("fieldRate").classList.toggle("hidden",!moving);
+  $("fieldTrim").classList.toggle("hidden",!moving);
+  $("fieldImgFmt").classList.toggle("hidden",moving);
+  $("btnRmLayer").classList.toggle("hidden",!hasOvl);
+  if(moving){
+    const dur=isVid?SRC.duration:SRC.overlay.duration;
+    $("tc").max=Math.max(0.1,dur);
+    $("tc").step=Math.max(0.01,dur/500);
   }
   TC=0;$("tc").value=0;$("tcLabel").textContent="0.00s";
   tally("on",SRC.width+"x"+SRC.height+" "+SRC.kind);
@@ -534,30 +542,36 @@ $("genPrompt").addEventListener("keydown",function(e){
   if(e.key==="Enter")$("btnGen").click();
 });
 $("btnAnimate").addEventListener("click",async function(){
-  if(!SRC){toast("Pick a still plate to animate first.");return;}
-  if(SRC.kind==="video"){toast("That plate is already a video.");return;}
+  if(!SRC){toast("Pick a still plate first.");return;}
+  if(SRC.kind==="video"){toast("Layers go on still plates.");return;}
   const prompt=$("genPrompt").value.trim();
-  if(!prompt){toast("Describe the motion \u2014 e.g. drifting dust, slow sun flares.");return;}
+  if(!prompt){toast("Describe the atmosphere \u2014 e.g. dust particles floating in the sun.");return;}
   const b=$("btnAnimate");
-  b.disabled=true;b.textContent="Animating\u2026";
+  b.disabled=true;b.textContent="Generating layer\u2026";
   try{
     const r=await api("/api/animate",{method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({source_id:SRC.id,prompt:prompt,duration:5})});
     const rid=(await r.json()).rid;
-    toast("Animation queued \u2014 usually 1\u20133 minutes.");
+    toast("Layer queued \u2014 the plate itself stays untouched at full res.");
     for(;;){
       await new Promise(function(res){setTimeout(res,5000);});
       const s=await (await api("/api/animate/"+rid)).json();
       if(s.status==="done"){
         $("genPrompt").value="";
         await loadSources(s.source.id);
-        toast("Motion plate ready \u2014 "+s.source.width+"x"+s.source.height+" video.");
+        toast("Ambient layer added \u2014 "+s.source.overlay.duration.toFixed(1)+"s seamless loop.");
         break;
       }
     }
-  }catch(e){toast("Animation failed. "+e.message);}
-  finally{b.disabled=false;b.textContent="Animate";}
+  }catch(e){toast("Layer generation failed. "+e.message);}
+  finally{b.disabled=false;b.textContent="Add layer";}
+});
+$("btnRmLayer").addEventListener("click",async function(){
+  if(!SRC||!SRC.overlay)return;
+  await api("/api/sources/"+SRC.id+"/overlay",{method:"DELETE"});
+  await loadSources(SRC.id);
+  toast("Layer removed.");
 });
 $("file").addEventListener("change",function(e){upload(e.target.files[0]);});
 $("btnDelSrc").addEventListener("click",async function(){

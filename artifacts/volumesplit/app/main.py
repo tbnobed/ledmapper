@@ -156,28 +156,29 @@ _animations: dict = {}          # fal request id -> {"prompt": ..., "source_name
 
 @app.post("/api/animate")
 def animate(body: AnimateIn):
+    """Generate an ambient overlay layer (dust/flares on black) for a still.
+
+    The plate itself never goes through the video model — it stays at full
+    native resolution. The layer is screen-blended over the unwrap in ffmpeg.
+    """
     prompt = body.prompt.strip()
     if not prompt:
         raise HTTPException(400, "Prompt is empty.")
     if body.duration not in (5, 10):
         raise HTTPException(400, "Duration must be 5 or 10 seconds.")
     try:
-        src = J.source_path(body.source_id)
+        J.source_path(body.source_id)
     except FileNotFoundError:
         raise HTTPException(404, "That plate is no longer on the server.")
     meta = J.source_meta(body.source_id)
     if meta.get("kind") == "video":
-        raise HTTPException(400, "Pick a still plate — this animates stills.")
+        raise HTTPException(400, "Pick a still plate — layers go on stills.")
 
-    # send the downscaled proxy: the model outputs 1080p anyway, and the
-    # full-res plate would bloat the request past upload limits
-    psrc, _, _ = J._still_proxy(body.source_id, src, meta)
-    mime = "image/jpeg" if psrc.suffix == ".jpg" else "image/png"
     try:
-        rid = G.submit_animation(prompt, psrc.read_bytes(), mime, body.duration)
+        rid = G.submit_overlay(prompt, body.duration)
     except RuntimeError as e:
         raise HTTPException(502, str(e))
-    _animations[rid] = {"prompt": prompt, "source_name": meta.get("name", "")}
+    _animations[rid] = {"prompt": prompt, "source_id": body.source_id}
     return {"rid": rid}
 
 
@@ -194,21 +195,47 @@ def animate_status(rid: str):
         return {"status": res["status"]}
 
     info = _animations.pop(rid)
-    sid = uuid.uuid4().hex[:12]
-    dest = J.UPLOADS / f"{sid}.mp4"
-    dest.write_bytes(res["data"])
+    sid = info["source_id"]
+    tmp = J.OVERLAYS / f".{sid}.{uuid.uuid4().hex[:8]}.mp4"
+    tmp.write_bytes(res["data"])
     try:
-        J.make_loopable(dest)           # crossfade tail into head — seamless loop
-        meta = J.probe(dest)
+        J.make_loopable(tmp)            # crossfade tail into head — seamless loop
+        ometa = J.probe(tmp)
     except Exception as e:
-        dest.unlink(missing_ok=True)
-        raise HTTPException(502, f"Generated video was not readable. {e}")
-    prompt = info["prompt"]
-    name = "AI motion - " + (prompt[:44] + ("…" if len(prompt) > 44 else ""))
-    meta.update({"id": sid, "name": name, "ext": ".mp4", "generated": True,
-                 "prompt": prompt, "animated_from": info["source_name"]})
-    (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(502, f"Generated layer was not readable. {e}")
+
+    # publish under the overlay lock: if the source was deleted while the
+    # layer was generating, discard the layer instead of resurrecting the
+    # source's metadata sidecar
+    with J._overlay_lock:
+        meta = J.source_meta(sid)
+        try:
+            J.source_path(sid)
+        except FileNotFoundError:
+            meta = None
+        if not meta:
+            tmp.unlink(missing_ok=True)
+            raise HTTPException(404, "That plate was removed while the layer "
+                                     "was generating.")
+        os.replace(tmp, J.overlay_path(sid))
+        meta["overlay"] = {"prompt": info["prompt"],
+                           "duration": ometa["duration"], "fps": ometa["fps"],
+                           "width": ometa["width"], "height": ometa["height"]}
+        (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
     return {"status": "done", "source": meta}
+
+
+@app.delete("/api/sources/{sid}/overlay")
+def rm_overlay(sid: str):
+    with J._overlay_lock:
+        meta = J.source_meta(sid)
+        if not meta:
+            raise HTTPException(404, "That plate is no longer on the server.")
+        J.overlay_path(sid).unlink(missing_ok=True)
+        meta.pop("overlay", None)
+        (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
+    return {"ok": True, "source": meta}
 
 
 @app.get("/api/sources")

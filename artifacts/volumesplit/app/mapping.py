@@ -137,8 +137,9 @@ def _mirror_panel(src: str, out: str, sample: int, panel_w: int, panel_h: int,
     return "".join(parts)
 
 
-def build_unwrap(iw: int, ih: int, p: Params, s: float = 1.0) -> str:
-    """Graph fragment producing [full] = the unwrap (11264x2560 at s=1).
+def build_unwrap(iw: int, ih: int, p: Params, s: float = 1.0,
+                 out: str = "full") -> str:
+    """Graph fragment producing [out] = the unwrap (11264x2560 at s=1).
 
     s < 1 composes the whole graph at reduced scale — used by previews so the
     mirror/blur/hstack work happens on ~10x fewer pixels. Encodes use s=1.
@@ -146,7 +147,7 @@ def build_unwrap(iw: int, ih: int, p: Params, s: float = 1.0) -> str:
     g: List[str] = []
     if p.mode == "canvas":
         g.append("[0:v]" + ",".join(
-            fit_chain(iw, ih, even(CANVAS_W * s), even(CANVAS_H * s), p)) + "[full];")
+            fit_chain(iw, ih, even(CANVAS_W * s), even(CANVAS_H * s), p)) + f"[{out}];")
         return "".join(g)
 
     cw, ch = even(WALLS["center"]["w"] * s), even(WALLS["center"]["h"] * s)
@@ -171,8 +172,30 @@ def build_unwrap(iw: int, ih: int, p: Params, s: float = 1.0) -> str:
         g.append(_mirror_panel("lstrip", "lp", samp, lw, ch, "right", blur))
         g.append(_mirror_panel("rstrip", "rp", samp, rw, ch, "left", blur))
 
-    g.append("[lp][cenA][rp]hstack=inputs=3[full];")
+    g.append(f"[lp][cenA][rp]hstack=inputs=3[{out}];")
     return "".join(g)
+
+
+def overlay_blend(s: float = 1.0, src: str = "pre", out: str = "full",
+                  loop_base: bool = False, fps: float | None = None) -> str:
+    """Screen-blend an ambient layer (input 1, dust/flares on black) over [src].
+
+    The layer was generated on pure black, so screen blend adds only the
+    bright particles and leaves the plate untouched. Runs INSIDE the shared
+    graph at scale s — preview and encode stay identical by construction.
+
+    loop_base: src is a single pre-flattened unwrap frame; decode it once and
+    repeat it in-graph (decoding a 11264-wide still per frame is what OOMs).
+    """
+    w, h = even(CANVAS_W * s), even(CANVAS_H * s)
+    base = f"[{src}]"
+    if loop_base:
+        base += "loop=loop=-1:size=1,"
+        if fps:
+            base += f"fps={fps},"
+    return (base + "format=gbrp[ovB];"
+            f"[1:v]scale={w}:{h}:flags=bilinear,setsar=1,format=gbrp[ovL];"
+            f"[ovB][ovL]blend=all_mode=screen:shortest=1,format=yuv420p[{out}];")
 
 
 def _grid_overlay(label: str, w: int, h: int, out: str) -> str:
@@ -230,19 +253,27 @@ def build_outputs(p: Params) -> Tuple[str, Dict[str, Tuple[int, int]]]:
     return "".join(g), sizes
 
 
-def full_graph(iw: int, ih: int, p: Params) -> Tuple[str, Dict[str, Tuple[int, int]]]:
-    a = build_unwrap(iw, ih, p)
+def full_graph(iw: int, ih: int, p: Params,
+               overlay: bool = False) -> Tuple[str, Dict[str, Tuple[int, int]]]:
+    if overlay:
+        a = build_unwrap(iw, ih, p, out="pre") + overlay_blend(1.0)
+    else:
+        a = build_unwrap(iw, ih, p)
     b, sizes = build_outputs(p)
     graph = a + b
     return graph.rstrip(";"), sizes
 
 
-def preview_graph(iw: int, ih: int, p: Params, width: int = 1408) -> str:
+def preview_graph(iw: int, ih: int, p: Params, width: int = 1408,
+                  overlay: bool = False) -> str:
     """Graph producing a single downscaled unwrap for the framing preview."""
     k = width / CANVAS_W
     ph = even(CANVAS_H * k)
-    return (build_unwrap(iw, ih, p, s=k) +
-            f"[full]scale={even(width)}:{ph}:flags=bilinear[pv]").rstrip(";")
+    if overlay:
+        a = build_unwrap(iw, ih, p, s=k, out="pre") + overlay_blend(k)
+    else:
+        a = build_unwrap(iw, ih, p, s=k)
+    return (a + f"[full]scale={even(width)}:{ph}:flags=bilinear[pv]").rstrip(";")
 
 
 # ------------------------------------------------------------------ codecs ---
