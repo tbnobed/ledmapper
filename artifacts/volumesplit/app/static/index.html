@@ -174,9 +174,10 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
   </div>
 
   <div id="live" class="hidden">
-    <div class="pvWrap"><canvas id="pv"></canvas><div class="spin" id="spin">Rendering</div></div>
+    <div class="pvWrap" style="position:relative"><canvas id="pv"></canvas><div class="spin" id="spin">Rendering</div><video id="pvClip" class="hidden" autoplay loop muted playsinline style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;cursor:pointer" title="Click to return to the still preview"></video></div>
     <div class="scrub" id="scrubRow">
       <span>TC</span><input type="range" id="tc" min="0" max="100" step="0.1" value="0"><span id="tcLabel">0.00s</span>
+      <button class="btn sm" id="btnMotion" title="Render a low-res clip of the loop through the exact encode pipeline &mdash; judge layer movement and loop seams before a full-res encode">&#9654; Motion</button>
     </div>
   </div>
 
@@ -243,7 +244,15 @@ async function api(path,opts){
 }
 
 let pvImg=null, pvCtl=null, pvTimer=null;
-function schedulePreview(){clearTimeout(pvTimer);pvTimer=setTimeout(loadPreview,220);}
+function hideClip(){
+  const v=$("pvClip");
+  if(!v.classList.contains("hidden")){
+    v.pause();v.removeAttribute("src");v.load();
+    if(v._url){URL.revokeObjectURL(v._url);v._url=null;}
+    v.classList.add("hidden");
+  }
+}
+function schedulePreview(){hideClip();clearTimeout(pvTimer);pvTimer=setTimeout(loadPreview,220);}
 async function loadPreview(){
   if(!SRC)return;
   if(pvCtl)pvCtl.abort();
@@ -379,6 +388,22 @@ function pickSource(id){
   tally("on",SRC.width+"x"+SRC.height+" "+SRC.kind);
   refresh();
 }
+$("pvClip").addEventListener("click",hideClip);
+$("btnMotion").addEventListener("click",async function(){
+  if(!SRC)return;
+  const b=$("btnMotion");
+  b.disabled=true;b.textContent="Rendering\u2026";
+  $("spin").classList.add("on");
+  try{
+    const r=await api("/api/preview/clip",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({source_id:SRC.id,params:P,timecode:0,width:1024})});
+    const url=URL.createObjectURL(await r.blob());
+    const v=$("pvClip");
+    v._url=url;v.src=url;v.classList.remove("hidden");v.play();
+  }catch(e){toast("Motion preview failed. "+e.message);}
+  finally{b.disabled=false;b.innerHTML="\u25b6 Motion";$("spin").classList.remove("on");}
+});
 function renderLayers(ovs){
   const row=$("layerRow");
   row.classList.toggle("hidden",!ovs);
@@ -470,6 +495,19 @@ async function refreshJobs(){
         '<div class="meta">'+(j.encode.codec||j.encode.image_format)+' \u00b7 '+j.params.mode+' \u00b7 '+j.elapsed+'s'+progressDetail+'</div>'+
         ((links||zip)?'<div class="links">'+links+zip+'</div>':"")+
         (j.error?'<div class="err">'+j.error.replace(/[<>]/g,"")+'</div>':"");
+      if(j.status==="running"||j.status==="queued"){
+        const c=document.createElement("button");
+        c.className="btn sm";
+        c.textContent="Cancel";
+        c.title="Stop this encode \u2014 partial outputs are discarded";
+        c.style.marginTop="6px";
+        c.addEventListener("click",async function(){
+          c.disabled=true;c.textContent="Cancelling\u2026";
+          try{await api("/api/jobs/"+j.id+"/cancel",{method:"POST"});refreshJobs();}
+          catch(e){toast("Could not cancel. "+e.message);c.disabled=false;c.textContent="Cancel";}
+        });
+        d.appendChild(c);
+      }
       wrap.appendChild(d);
     });
   }

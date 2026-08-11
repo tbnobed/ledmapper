@@ -170,6 +170,55 @@ def _still_proxy(sid: str, src: Path, meta: dict) -> tuple[Path, int, int]:
 
 # --------------------------------------------------------------- previews ----
 
+def render_preview_clip(sid: str, p: M.Params, width: int = 704,
+                        max_dur: float = 20.0) -> bytes:
+    """A low-res H.264 loop of the plate in motion — same graph as the
+    encode, small scale, so operators can judge layer movement and loop
+    seams without waiting for a full-res render."""
+    src = source_path(sid)
+    meta = source_meta(sid)
+    iw, ih = meta["width"], meta["height"]
+    is_video = meta.get("kind") == "video"
+    if not is_video:
+        src, iw, ih = _still_proxy(sid, src, meta)
+    ovs = valid_overlays(sid, meta)
+    if not is_video and not ovs:
+        raise ValueError("This plate is a still — there is no motion to preview.")
+
+    ops = [float(o.get("opacity", 1) or 1) for o in ovs]
+    pfps = (max((float(o.get("fps", 0) or 0) for o in ovs), default=0) or 24) \
+        if ovs else None
+    graph = M.preview_graph(iw, ih, p, width, n_overlays=len(ovs),
+                            opacities=ops, fps=pfps)
+
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+    if is_video:
+        dur = min(float(meta.get("duration", 0) or 0) or max_dur, max_dur)
+        cmd += ["-t", f"{dur:.3f}", "-i", str(src)]
+    else:
+        dur = min(max((float(o.get("duration", 0) or 0) for o in ovs),
+                      default=0), max_dur)
+        if dur <= 0:
+            raise ValueError("Could not determine the layer duration.")
+        cmd += ["-loop", "1", "-framerate", f"{pfps}", "-t", f"{dur:.3f}",
+                "-i", str(src)]
+        for ov in ovs:
+            cmd += ["-stream_loop", "-1", "-i", str(overlay_path(sid, ov["id"]))]
+
+    out = OVERLAYS / f".clip.{uuid.uuid4().hex[:8]}.mp4"
+    cmd += ["-filter_complex", graph, "-map", "[pv]",
+            "-t", f"{dur:.3f}", "-c:v", "libx264", "-preset", "veryfast",
+            "-crf", "26", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            str(out)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=300)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.decode("utf8", "replace")[-300:])
+        return out.read_bytes()
+    finally:
+        out.unlink(missing_ok=True)
+
+
 def render_preview(sid: str, p: M.Params, timecode: float = 0.0,
                    width: int = 1408) -> bytes:
     """One downscaled unwrap frame, straight to stdout. Never touches disk."""
@@ -380,6 +429,16 @@ def cancel(jid: str) -> bool:
     proc = _procs.get(jid)
     if proc and proc.poll() is None:
         proc.terminate()
+
+        def _force_kill(p=proc):
+            # a full-canvas encode can sit in a prores frame for a while and
+            # shrug off SIGTERM — escalate so Cancel means now, not "later"
+            try:
+                p.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                p.kill()
+
+        threading.Thread(target=_force_kill, daemon=True).start()
     if j.status in ("queued", "running"):
         j.status = "cancelled"
         j.save()

@@ -201,7 +201,10 @@ def overlay_blend(n: int, s: float = 1.0, src: str = "pre", out: str = "full",
     # setpts=PTS-STARTPTS on every branch: blend's framesync pairs frames by
     # timestamp, and a seeked (-ss) layer input starts at a nonzero pts —
     # without normalization the blend silently passes the plate through
-    g = base + "setpts=PTS-STARTPTS,format=gbrp[ob0];"
+    # normalize the base to the same rounded size as the layers — unwrap
+    # padding can round differently at odd preview scales (blend requires
+    # equal sizes). At s=1 this is exactly canvas size: a no-op, parity safe.
+    g = base + f"setpts=PTS-STARTPTS,scale={w}:{h}:flags=bilinear,setsar=1,format=gbrp[ob0];"
     for i in range(1, n + 1):
         o = opacities[i - 1] if opacities else 1.0
         dim = (f"colorchannelmixer=rr={o:.4f}:gg={o:.4f}:bb={o:.4f},"

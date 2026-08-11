@@ -349,6 +349,21 @@ def rm_unused_sources():
 
 # ------------------------------------------------------------------ preview --
 
+@app.post("/api/preview/clip")
+def preview_clip(body: PreviewIn):
+    try:
+        data = J.render_preview_clip(body.source_id, body.params.to_params(),
+                                     max(320, min(body.width, 1408)))
+    except FileNotFoundError:
+        raise HTTPException(404, "That plate is no longer on the server.")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Motion preview failed. {e}")
+    return Response(content=data, media_type="video/mp4",
+                    headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/preview")
 def preview(body: PreviewIn):
     try:
