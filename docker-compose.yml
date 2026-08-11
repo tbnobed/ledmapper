@@ -1,0 +1,23 @@
+services:
+  volumesplit:
+    build: .
+    container_name: volumesplit
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      VS_DATA: /data
+      VS_WORKERS: "1"          # ffmpeg saturates cores; raise only with headroom
+    volumes:
+      - vs-data:/data
+      # bind-mount your plate storage to pull sources straight off the share:
+      # - /mnt/media/plates:/data/uploads
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    tmpfs:
+      - /tmp:size=2g
+
+volumes:
+  vs-data:
