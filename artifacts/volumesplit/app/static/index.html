@@ -449,12 +449,40 @@ function renderLayers(ovs){
     row.appendChild(chip);
   }
 }
+function xhrUpload(path,file,label){
+  // fetch() can't report upload progress, so uploads go through XHR.
+  const fd=new FormData();fd.append("file",file);
+  return new Promise(function(resolve,reject){
+    const xhr=new XMLHttpRequest();
+    xhr.open("POST",path);
+    xhr.upload.addEventListener("progress",function(ev){
+      if(ev.lengthComputable){
+        const pct=Math.round(ev.loaded/ev.total*100);
+        tally("busy",label+" "+pct+"% ("+fmtMB(ev.loaded)+" / "+fmtMB(ev.total)+")");
+      }else{
+        tally("busy",label+" "+fmtMB(ev.loaded));
+      }
+    });
+    xhr.upload.addEventListener("load",function(){tally("busy",label+" \u2014 server processing\u2026");});
+    xhr.addEventListener("load",function(){
+      if(xhr.status>=200&&xhr.status<300){resolve(JSON.parse(xhr.responseText));}
+      else{
+        let m=xhr.statusText||("HTTP "+xhr.status);
+        try{m=JSON.parse(xhr.responseText).detail||m;}catch(e){}
+        reject(new Error(m));
+      }
+    });
+    xhr.addEventListener("error",function(){reject(new Error("network error"));});
+    xhr.addEventListener("abort",function(){reject(new Error("upload aborted"));});
+    xhr.send(fd);
+  });
+}
+function fmtMB(b){return (b/1048576).toFixed(1)+" MB";}
 async function upload(f){
   if(!f)return;
   tally("busy","Uploading "+f.name);
-  const fd=new FormData();fd.append("file",f);
   try{
-    const m=await (await api("/api/sources",{method:"POST",body:fd})).json();
+    const m=await xhrUpload("/api/sources",f,"Uploading "+f.name);
     await loadSources(m.id);
   }catch(e){tally(null,"Idle");toast("Upload failed. "+e.message);}
 }
@@ -680,12 +708,10 @@ $("layerFile").addEventListener("change",async function(e){
   const b=$("btnUpLayer");
   b.disabled=true;b.textContent="Uploading\u2026";
   try{
-    const fd=new FormData();fd.append("file",f);
-    const r=await api("/api/sources/"+SRC.id+"/overlay",{method:"POST",body:fd});
-    const s=await r.json();
+    const s=await xhrUpload("/api/sources/"+SRC.id+"/overlay",f,"Uploading layer "+f.name);
     await loadSources(SRC.id);
     toast("Layer attached \u2014 "+s.source.overlays[s.source.overlays.length-1].duration.toFixed(1)+"s, blended over the full-res plate.");
-  }catch(err){toast("Layer upload failed. "+err.message);}
+  }catch(err){tally(null,"Idle");toast("Layer upload failed. "+err.message);}
   finally{b.disabled=false;b.textContent="Upload layer";}
 });
 $("file").addEventListener("change",function(e){upload(e.target.files[0]);});
