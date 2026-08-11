@@ -163,8 +163,9 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
     <button class="btn sm" id="btnGen">Generate</button>
     <button class="btn sm" id="btnAnimate" title="Generate an ambient layer (dust, flares, atmosphere) and blend it over the selected still. The plate itself stays at full resolution.">Add layer</button>
     <button class="btn sm" id="btnUpLayer" title="Attach your own video (dust, flares, snow shot on black) as the ambient layer for the selected still. Screen-blended, so black stays invisible.">Upload layer</button>
-    <button class="btn sm hidden" id="btnRmLayer" title="Remove the ambient layer from this plate">Remove layer</button>
     <input type="file" id="layerFile" accept="video/*" class="hidden">
+  </div>
+  <div class="srcbar hidden" id="layerRow" style="flex-wrap:wrap;gap:6px">
   </div>
 
   <div class="drop" id="drop" tabindex="0" role="button">
@@ -320,12 +321,12 @@ function updateReadout(){
   e.textContent=up.toFixed(2)+"x";
   e.className="v "+(up>3?"warn":"ok");
   $("rUpNote").textContent=up>3?"soft at 1.9mm":"within tolerance";
-  const ov=SRC.kind!=="video"&&SRC.overlay;
-  if(SRC.kind==="video"||ov){
-    const dur=ov?SRC.overlay.duration:SRC.duration;
-    const sfps=ov?SRC.overlay.fps:SRC.fps;
-    $("rDur").textContent=dur.toFixed(1)+"s"+(ov?" loop":"");
-    $("rFps").textContent=sfps+" fps"+(ov?" · still + layer":"");
+  const ovs=SRC.kind!=="video"&&SRC.overlays&&SRC.overlays.length?SRC.overlays:null;
+  if(SRC.kind==="video"||ovs){
+    const dur=ovs?Math.max.apply(null,ovs.map(function(o){return o.duration;})):SRC.duration;
+    const sfps=ovs?Math.max.apply(null,ovs.map(function(o){return o.fps;})):SRC.fps;
+    $("rDur").textContent=dur.toFixed(1)+"s"+(ovs?" loop":"");
+    $("rFps").textContent=sfps+" fps"+(ovs?" · still + "+ovs.length+(ovs.length>1?" layers":" layer"):"");
     const mbpf=({hapq:2.1,hap:1.1,prores:3.4,dnxhr:2.6,h264:0.25})[ENC.codec]||2;
     const rate=parseFloat($("fps").value)||sfps||30;
     $("rSize").textContent=(mbpf*dur*rate*1.45/1024).toFixed(1)+" GB";
@@ -345,7 +346,8 @@ async function loadSources(sel){
   for(const m of SOURCES){
     const o=document.createElement("option");
     o.value=m.id;
-    o.textContent=m.name+"  -  "+m.width+"x"+m.height+"  "+(m.kind==="video"?m.fps+"fps":(m.overlay?"still + layer":"still"));
+    const nl=(m.overlays||[]).length;
+    o.textContent=m.name+"  -  "+m.width+"x"+m.height+"  "+(m.kind==="video"?m.fps+"fps":(nl?"still + "+nl+(nl>1?" layers":" layer"):"still"));
     s.appendChild(o);
   }
   if(sel)s.value=sel;
@@ -360,22 +362,67 @@ function pickSource(id){
   $("btnRun").disabled=!has;
   if(!has){tally(null,"Idle");return;}
   const isVid=SRC.kind==="video";
-  const hasOvl=!isVid&&!!SRC.overlay;
-  const moving=isVid||hasOvl;          // still + ambient layer encodes as video
+  const ovs=!isVid&&SRC.overlays&&SRC.overlays.length?SRC.overlays:null;
+  const moving=isVid||!!ovs;           // still + ambient layers encodes as video
   $("scrubRow").classList.toggle("hidden",!moving);
   $("fieldCodec").classList.toggle("hidden",!moving);
   $("fieldRate").classList.toggle("hidden",!moving);
   $("fieldTrim").classList.toggle("hidden",!moving);
   $("fieldImgFmt").classList.toggle("hidden",moving);
-  $("btnRmLayer").classList.toggle("hidden",!hasOvl);
+  renderLayers(ovs);
   if(moving){
-    const dur=isVid?SRC.duration:SRC.overlay.duration;
+    const dur=isVid?SRC.duration:Math.max.apply(null,ovs.map(function(o){return o.duration;}));
     $("tc").max=Math.max(0.1,dur);
     $("tc").step=Math.max(0.01,dur/500);
   }
   TC=0;$("tc").value=0;$("tcLabel").textContent="0.00s";
   tally("on",SRC.width+"x"+SRC.height+" "+SRC.kind);
   refresh();
+}
+function renderLayers(ovs){
+  const row=$("layerRow");
+  row.classList.toggle("hidden",!ovs);
+  row.innerHTML="";
+  if(!ovs)return;
+  for(const o of ovs){
+    const chip=document.createElement("span");
+    chip.className="btn sm";
+    chip.style.cursor="default";
+    const name=(o.uploaded?"\u2191 ":"\u2728 ")+(o.prompt||"layer");
+    chip.textContent=(name.length>34?name.slice(0,32)+"\u2026":name)+" \u00b7 "+o.duration.toFixed(1)+"s ";
+    const op=document.createElement("input");
+    op.type="range";op.min="0";op.max="100";op.step="5";
+    op.value=Math.round((o.opacity==null?1:o.opacity)*100);
+    op.style.width="70px";op.style.verticalAlign="middle";op.style.margin="0 4px";
+    const pct=document.createElement("span");
+    pct.textContent=op.value+"%";
+    pct.style.opacity="0.7";pct.style.fontSize="11px";pct.style.minWidth="32px";pct.style.display="inline-block";
+    op.title="Layer opacity \u2014 scales how much light this layer adds";
+    op.addEventListener("input",function(){pct.textContent=op.value+"%";});
+    op.addEventListener("change",async function(){
+      try{
+        await api("/api/sources/"+SRC.id+"/overlay/"+o.id,{method:"PATCH",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({opacity:op.value/100})});
+        o.opacity=op.value/100;
+        schedulePreview();
+      }catch(err){toast("Could not set opacity. "+err.message);}
+    });
+    chip.appendChild(op);
+    chip.appendChild(pct);
+    const x=document.createElement("a");
+    x.textContent="\u00d7";
+    x.href="#";x.title="Remove this layer";
+    x.style.marginLeft="6px";x.style.fontWeight="bold";
+    x.addEventListener("click",async function(ev){
+      ev.preventDefault();
+      await api("/api/sources/"+SRC.id+"/overlay/"+o.id,{method:"DELETE"});
+      await loadSources(SRC.id);
+      toast("Layer removed.");
+    });
+    chip.appendChild(x);
+    row.appendChild(chip);
+  }
 }
 async function upload(f){
   if(!f)return;
@@ -562,7 +609,7 @@ $("btnAnimate").addEventListener("click",async function(){
       if(s.status==="done"){
         $("genPrompt").value="";
         await loadSources(s.source.id);
-        toast("Ambient layer added \u2014 "+s.source.overlay.duration.toFixed(1)+"s seamless loop.");
+        toast("Ambient layer added \u2014 "+s.source.overlays[s.source.overlays.length-1].duration.toFixed(1)+"s seamless loop. Layers stack \u2014 add more or \u00d7 to remove.");
         break;
       }
     }
@@ -584,15 +631,9 @@ $("layerFile").addEventListener("change",async function(e){
     const r=await api("/api/sources/"+SRC.id+"/overlay",{method:"POST",body:fd});
     const s=await r.json();
     await loadSources(SRC.id);
-    toast("Layer attached \u2014 "+s.source.overlay.duration.toFixed(1)+"s, blended over the full-res plate.");
+    toast("Layer attached \u2014 "+s.source.overlays[s.source.overlays.length-1].duration.toFixed(1)+"s, blended over the full-res plate.");
   }catch(err){toast("Layer upload failed. "+err.message);}
   finally{b.disabled=false;b.textContent="Upload layer";}
-});
-$("btnRmLayer").addEventListener("click",async function(){
-  if(!SRC||!SRC.overlay)return;
-  await api("/api/sources/"+SRC.id+"/overlay",{method:"DELETE"});
-  await loadSources(SRC.id);
-  toast("Layer removed.");
 });
 $("file").addEventListener("change",function(e){upload(e.target.files[0]);});
 $("btnDelSrc").addEventListener("click",async function(){

@@ -201,6 +201,8 @@ def animate_status(rid: str):
     try:
         J.make_loopable(tmp)            # crossfade tail into head — seamless loop
         ometa = J.probe(tmp)
+        if float(ometa.get("duration", 0) or 0) <= 0.05:
+            raise ValueError("no valid duration after loop pass")
     except Exception as e:
         tmp.unlink(missing_ok=True)
         raise HTTPException(502, f"Generated layer was not readable. {e}")
@@ -218,10 +220,12 @@ def animate_status(rid: str):
             tmp.unlink(missing_ok=True)
             raise HTTPException(404, "That plate was removed while the layer "
                                      "was generating.")
-        os.replace(tmp, J.overlay_path(sid))
-        meta["overlay"] = {"prompt": info["prompt"],
-                           "duration": ometa["duration"], "fps": ometa["fps"],
-                           "width": ometa["width"], "height": ometa["height"]}
+        lid = uuid.uuid4().hex[:8]
+        os.replace(tmp, J.overlay_path(sid, lid))
+        meta.setdefault("overlays", []).append(
+            {"id": lid, "prompt": info["prompt"],
+             "duration": ometa["duration"], "fps": ometa["fps"],
+             "width": ometa["width"], "height": ometa["height"]})
         (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
     return {"status": "done", "source": meta}
 
@@ -245,32 +249,76 @@ async def upload_overlay(sid: str, file: UploadFile = File(...)):
         ometa = J.probe(tmp)
         if ometa["kind"] != "video":
             raise ValueError("that file is a still image, not a video")
+        if float(ometa.get("duration", 0) or 0) <= 0.05:
+            raise ValueError("could not read a valid duration from it")
     except Exception as e:
         tmp.unlink(missing_ok=True)
         raise HTTPException(400, f"Could not use that file as a layer. {e}")
 
     with J._overlay_lock:
-        if not J.source_meta(sid):
+        meta = J.source_meta(sid)
+        if not meta:
             tmp.unlink(missing_ok=True)
             raise HTTPException(404, "That plate was removed.")
-        os.replace(tmp, J.overlay_path(sid))
+        lid = uuid.uuid4().hex[:8]
+        os.replace(tmp, J.overlay_path(sid, lid))
+        meta.setdefault("overlays", []).append(
+            {"id": lid, "prompt": file.filename or "uploaded layer",
+             "duration": ometa["duration"], "fps": ometa["fps"],
+             "width": ometa["width"], "height": ometa["height"],
+             "uploaded": True})
+        (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
+    return {"ok": True, "source": meta}
+
+
+class LayerPatch(BaseModel):
+    opacity: float
+
+
+@app.patch("/api/sources/{sid}/overlay/{lid}")
+def patch_overlay_layer(sid: str, lid: str, body: LayerPatch):
+    if not (0.0 <= body.opacity <= 1.0):
+        raise HTTPException(400, "Opacity must be between 0 and 1.")
+    with J._overlay_lock:
         meta = J.source_meta(sid)
-        meta["overlay"] = {"prompt": file.filename or "uploaded layer",
-                           "duration": ometa["duration"], "fps": ometa["fps"],
-                           "width": ometa["width"], "height": ometa["height"],
-                           "uploaded": True}
+        if not meta:
+            raise HTTPException(404, "That plate is no longer on the server.")
+        ov = next((o for o in meta.get("overlays", [])
+                   if o.get("id") == lid), None)
+        if not ov:
+            raise HTTPException(404, "That layer is no longer attached.")
+        ov["opacity"] = round(body.opacity, 3)
+        (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
+    return {"ok": True, "source": meta}
+
+
+@app.delete("/api/sources/{sid}/overlay/{lid}")
+def rm_overlay_layer(sid: str, lid: str):
+    with J._overlay_lock:
+        meta = J.source_meta(sid)
+        if not meta:
+            raise HTTPException(404, "That plate is no longer on the server.")
+        ovs = meta.get("overlays", [])
+        if not any(o.get("id") == lid for o in ovs):
+            raise HTTPException(404, "That layer is no longer attached.")
+        J.overlay_path(sid, lid).unlink(missing_ok=True)
+        meta["overlays"] = [o for o in ovs if o.get("id") != lid]
+        if not meta["overlays"]:
+            meta.pop("overlays")
         (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
     return {"ok": True, "source": meta}
 
 
 @app.delete("/api/sources/{sid}/overlay")
-def rm_overlay(sid: str):
+def rm_overlay_all(sid: str):
     with J._overlay_lock:
         meta = J.source_meta(sid)
         if not meta:
             raise HTTPException(404, "That plate is no longer on the server.")
-        J.overlay_path(sid).unlink(missing_ok=True)
-        meta.pop("overlay", None)
+        for o in meta.get("overlays", []):
+            if o.get("id"):
+                J.overlay_path(sid, o["id"]).unlink(missing_ok=True)
+        meta.pop("overlays", None)
         (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
     return {"ok": True, "source": meta}
 

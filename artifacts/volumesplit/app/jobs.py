@@ -79,30 +79,56 @@ def source_path(sid: str) -> Path:
 
 def source_meta(sid: str) -> dict:
     p = UPLOADS / f"{sid}.json"
-    return json.loads(p.read_text()) if p.exists() else {}
+    if not p.exists():
+        return {}
+    m = json.loads(p.read_text())
+    if "overlay" in m:              # legacy single-layer record -> layer list
+        with _overlay_lock:
+            if not p.exists():      # deleted while we waited
+                return {}
+            m = json.loads(p.read_text())   # re-read under the lock
+            if "overlay" in m:
+                old = OVERLAYS / f"{sid}.mp4"
+                ov = m.pop("overlay")
+                ov["id"] = "l0"
+                if old.exists():
+                    os.replace(old, OVERLAYS / f"{sid}.l0.mp4")
+                    m["overlays"] = m.get("overlays", []) + [ov]
+                tmp = p.with_suffix(".json.tmp")
+                tmp.write_text(json.dumps(m))
+                os.replace(tmp, p)
+    return m
 
 
 def list_sources() -> List[dict]:
     out = []
     for j in sorted(UPLOADS.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
-            out.append(json.loads(j.read_text()))
+            m = source_meta(j.stem)     # runs legacy layer migration
+            if m:
+                out.append(m)
         except Exception:
             pass
     return out
 
 
-# serializes overlay publish/removal against source deletion, so a completed
-# fal request can never resurrect a deleted source's metadata
-_overlay_lock = threading.Lock()
+# serializes overlay publish/removal, legacy migration, and source deletion,
+# so a completed fal request can never resurrect a deleted source's metadata
+# and concurrent sidecar rewrites can't drop layers. RLock: holders of the
+# lock call source_meta(), which also acquires it for migration.
+_overlay_lock = threading.RLock()
 
 
-def overlay_path(sid: str) -> Path:
-    return OVERLAYS / f"{sid}.mp4"
+def overlay_path(sid: str, lid: str) -> Path:
+    return OVERLAYS / f"{sid}.{lid}.mp4"
 
 
-def has_overlay(sid: str, meta: dict) -> bool:
-    return bool(meta.get("overlay")) and overlay_path(sid).exists()
+def valid_overlays(sid: str, meta: dict) -> List[dict]:
+    """Layers whose media file actually exists, in stacking order."""
+    if meta.get("kind") == "video":
+        return []
+    return [ov for ov in meta.get("overlays", [])
+            if ov.get("id") and overlay_path(sid, ov["id"]).exists()]
 
 
 def delete_source(sid: str):
@@ -110,7 +136,8 @@ def delete_source(sid: str):
         for p in UPLOADS.glob(f"{sid}.*"):
             p.unlink(missing_ok=True)
         (PROXIES / f"{sid}.jpg").unlink(missing_ok=True)
-        overlay_path(sid).unlink(missing_ok=True)
+        for p in OVERLAYS.glob(f"{sid}.*"):
+            p.unlink(missing_ok=True)
 
 
 def _still_proxy(sid: str, src: Path, meta: dict) -> tuple[Path, int, int]:
@@ -151,18 +178,26 @@ def render_preview(sid: str, p: M.Params, timecode: float = 0.0,
     iw, ih = meta["width"], meta["height"]
     if meta.get("kind") != "video":
         src, iw, ih = _still_proxy(sid, src, meta)
-    ovl = has_overlay(sid, meta)
-    graph = M.preview_graph(iw, ih, p, width, overlay=ovl)
+    ovs = valid_overlays(sid, meta)
+    ops = [float(o.get("opacity", 1) or 1) for o in ovs]
+    # same CFR normalization as the encode graph — parity includes framesync
+    pfps = (max((float(o.get("fps", 0) or 0) for o in ovs), default=0) or 24) \
+        if ovs else None
+    graph = M.preview_graph(iw, ih, p, width, n_overlays=len(ovs),
+                            opacities=ops, fps=pfps)
 
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
     if meta.get("kind") == "video" and timecode > 0:
         cmd += ["-ss", f"{timecode:.3f}"]
     cmd += ["-i", str(src)]
-    if ovl:
-        # scrubbing a still+overlay source scrubs the overlay layer
-        if timecode > 0:
-            cmd += ["-ss", f"{timecode:.3f}"]
-        cmd += ["-i", str(overlay_path(sid))]
+    for ov in ovs:
+        # scrubbing a still+layers source scrubs the layers; shorter layers
+        # wrap around (they loop in the encode)
+        d = float(ov.get("duration", 0) or 0)
+        tc = (timecode % d) if (timecode > 0 and d > 0.05) else 0
+        if tc > 0:
+            cmd += ["-ss", f"{tc:.3f}"]
+        cmd += ["-i", str(overlay_path(sid, ov["id"]))]
     cmd += ["-filter_complex", graph,
             "-map", "[pv]", "-frames:v", "1", "-f", "image2", "-c:v", "mjpeg",
             "-q:v", "4", "pipe:1"]
@@ -222,9 +257,9 @@ class Job:
     error: str = ""
     log: List[str] = field(default_factory=list)
     source_name: str = ""
-    overlay: Optional[dict] = None      # snapshot at submission — a layer
-                                        # added/removed later can't change
-                                        # what this job encodes
+    overlay: Optional[list] = None      # layer-list snapshot at submission —
+                                        # layers added/removed later can't
+                                        # change what this job encodes
 
     def dir(self) -> Path:
         return JOBS / self.id
@@ -277,9 +312,8 @@ def get_job(jid: str) -> Optional[Job]:
 def submit(source_id: str, params: M.Params, encode: dict) -> Job:
     jid = uuid.uuid4().hex[:12]
     meta = source_meta(source_id)
-    ovl = (dict(meta["overlay"])
-           if meta.get("kind") != "video" and has_overlay(source_id, meta)
-           else None)
+    ovs = valid_overlays(source_id, meta)
+    ovl = [dict(o) for o in ovs] or None
     j = Job(id=jid, source_id=source_id, params=params.dict(), encode=encode,
             source_name=meta.get("name", source_id), overlay=ovl)
     with _lock:
@@ -387,10 +421,11 @@ def _run(j: Job):
     outdir = j.dir()
     outdir.mkdir(parents=True, exist_ok=True)
 
-    ovl = j.overlay is not None
-    if ovl and not overlay_path(j.source_id).exists():
+    ovs = j.overlay or []
+    ovl = bool(ovs)
+    if any(not overlay_path(j.source_id, o["id"]).exists() for o in ovs):
         j.status = "failed"
-        j.error = ("The ambient layer this job was queued with has been "
+        j.error = ("An ambient layer this job was queued with has been "
                    "removed. Re-queue the job.")
         j.finished = time.time()
         j.save()
@@ -403,11 +438,13 @@ def _run(j: Job):
     trim_start = enc.get("trim_start")
     trim_dur = enc.get("trim_duration")
     flat = None
+    ov_dur = 0.0
     if ovl:
-        # Still + ambient layer, two passes. Pass 1 flattens the unwrap of the
-        # still ONCE (decoding a 13k plate per output frame is an OOM). Pass 2
-        # decodes that frame once, repeats it in-graph, and screen-blends the
-        # layer; blend shortest=1 ends the encode when the layer ends.
+        # Still + ambient layers, two passes. Pass 1 flattens the unwrap of
+        # the still ONCE (decoding a 13k plate per output frame is an OOM).
+        # Pass 2 decodes that frame once, repeats it in-graph, and screen-
+        # blends every layer. All layers loop (-stream_loop -1); the encode
+        # runs to the LONGEST layer (or the trim), set via -t per output.
         flat = outdir / "unwrap_base.png"
         g1 = M.build_unwrap(meta["width"], meta["height"], p).rstrip(";")
         r1 = subprocess.run(
@@ -420,16 +457,29 @@ def _run(j: Job):
             j.finished = time.time()
             j.save()
             return
-        ofps = float((j.overlay or {}).get("fps", 0) or 0) or None
-        graph = (M.overlay_blend(1.0, src="0:v", loop_base=True, fps=ofps) +
+        ofps = max((float(o.get("fps", 0) or 0) for o in ovs), default=0) or 24
+        ov_dur = (parse_tc(trim_dur) if trim_dur else
+                  max((float(o.get("duration", 0) or 0) for o in ovs), default=0))
+        if not ov_dur or ov_dur <= 0:
+            # every layer loops forever (-stream_loop -1); without a positive
+            # -t this encode would never end
+            j.status = "failed"
+            j.error = ("Could not determine the layer duration for this "
+                       "encode. Remove and re-attach the layer.")
+            j.finished = time.time()
+            j.save()
+            return
+        ops = [float(o.get("opacity", 1) or 1) for o in ovs]
+        graph = (M.overlay_blend(len(ovs), 1.0, src="0:v",
+                                 loop_base=True, fps=ofps, opacities=ops) +
                  M.build_outputs(p)[0]).rstrip(";")
         sizes = M.build_outputs(p)[1]
         cmd += ["-i", str(flat)]
-        if trim_start:
-            cmd += ["-ss", str(trim_start)]
-        if trim_dur:
-            cmd += ["-t", str(trim_dur)]
-        cmd += ["-i", str(overlay_path(j.source_id))]
+        for o in ovs:
+            cmd += ["-stream_loop", "-1"]
+            if trim_start:
+                cmd += ["-ss", str(trim_start)]
+            cmd += ["-i", str(overlay_path(j.source_id, o["id"]))]
     else:
         graph, sizes = M.full_graph(meta["width"], meta["height"], p)
         if is_video and trim_start:
@@ -444,6 +494,8 @@ def _run(j: Job):
         ext = spec["ext"]
         for label in sizes:
             cmd += ["-map", f"[{label}]"] + spec["args"] + ["-an"]
+            if ovl and ov_dur > 0:
+                cmd += ["-t", f"{ov_dur:.3f}"]   # layers loop; -t ends the encode
             if enc.get("fps"):
                 cmd += ["-r", str(enc["fps"])]
             cmd += [str(outdir / f"{label}.{ext}")]
@@ -459,10 +511,9 @@ def _run(j: Job):
     total_us = 0.0
     if is_video:
         if ovl:
-            base = float((j.overlay or {}).get("duration", 0) or 0)
+            d = ov_dur
         else:
-            base = float(meta.get("duration", 0) or 0)
-        d = parse_tc(trim_dur) if trim_dur else base
+            d = parse_tc(trim_dur) if trim_dur else float(meta.get("duration", 0) or 0)
         total_us = d * 1_000_000
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

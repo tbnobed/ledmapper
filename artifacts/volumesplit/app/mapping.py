@@ -176,26 +176,42 @@ def build_unwrap(iw: int, ih: int, p: Params, s: float = 1.0,
     return "".join(g)
 
 
-def overlay_blend(s: float = 1.0, src: str = "pre", out: str = "full",
-                  loop_base: bool = False, fps: float | None = None) -> str:
-    """Screen-blend an ambient layer (input 1, dust/flares on black) over [src].
-
-    The layer was generated on pure black, so screen blend adds only the
-    bright particles and leaves the plate untouched. Runs INSIDE the shared
-    graph at scale s — preview and encode stay identical by construction.
+def overlay_blend(n: int, s: float = 1.0, src: str = "pre", out: str = "full",
+                  loop_base: bool = False, fps: float | None = None,
+                  opacities: list | None = None) -> str:
+    """Screen-blend n ambient layers (inputs 1..n, dust/flares on black) over
+    [src], in order. Screen blend is associative: each layer adds only its
+    bright content, black stays invisible, the plate is untouched. Runs
+    INSIDE the shared graph at scale s — preview and encode stay identical
+    by construction.
 
     loop_base: src is a single pre-flattened unwrap frame; decode it once and
     repeat it in-graph (decoding a 11264-wide still per frame is what OOMs).
+    fps: normalize base and every layer to one CFR (layers can have mixed
+    frame rates; blend's framesync needs a common timeline).
+    opacities: per-layer 0..1 multiplier applied BEFORE the screen blend —
+    dimming the layer scales exactly how much light it adds to the plate.
     """
     w, h = even(CANVAS_W * s), even(CANVAS_H * s)
     base = f"[{src}]"
     if loop_base:
         base += "loop=loop=-1:size=1,"
-        if fps:
-            base += f"fps={fps},"
-    return (base + "format=gbrp[ovB];"
-            f"[1:v]scale={w}:{h}:flags=bilinear,setsar=1,format=gbrp[ovL];"
-            f"[ovB][ovL]blend=all_mode=screen:shortest=1,format=yuv420p[{out}];")
+    if fps:
+        base += f"fps={fps},"
+    # setpts=PTS-STARTPTS on every branch: blend's framesync pairs frames by
+    # timestamp, and a seeked (-ss) layer input starts at a nonzero pts —
+    # without normalization the blend silently passes the plate through
+    g = base + "setpts=PTS-STARTPTS,format=gbrp[ob0];"
+    for i in range(1, n + 1):
+        o = opacities[i - 1] if opacities else 1.0
+        dim = (f"colorchannelmixer=rr={o:.4f}:gg={o:.4f}:bb={o:.4f},"
+               if o < 0.9995 else "")
+        g += (f"[{i}:v]scale={w}:{h}:flags=bilinear,setsar=1,"
+              "setpts=PTS-STARTPTS,"
+              + (f"fps={fps}," if fps else "") + f"format=gbrp,{dim}"
+              f"setsar=1[ol{i}];"
+              f"[ob{i - 1}][ol{i}]blend=all_mode=screen[ob{i}];")
+    return g + f"[ob{n}]format=yuv420p[{out}];"
 
 
 def _grid_overlay(label: str, w: int, h: int, out: str) -> str:
@@ -253,10 +269,11 @@ def build_outputs(p: Params) -> Tuple[str, Dict[str, Tuple[int, int]]]:
     return "".join(g), sizes
 
 
-def full_graph(iw: int, ih: int, p: Params,
-               overlay: bool = False) -> Tuple[str, Dict[str, Tuple[int, int]]]:
-    if overlay:
-        a = build_unwrap(iw, ih, p, out="pre") + overlay_blend(1.0)
+def full_graph(iw: int, ih: int, p: Params, n_overlays: int = 0,
+               opacities: list | None = None) -> Tuple[str, Dict[str, Tuple[int, int]]]:
+    if n_overlays:
+        a = (build_unwrap(iw, ih, p, out="pre") +
+             overlay_blend(n_overlays, 1.0, opacities=opacities))
     else:
         a = build_unwrap(iw, ih, p)
     b, sizes = build_outputs(p)
@@ -265,12 +282,14 @@ def full_graph(iw: int, ih: int, p: Params,
 
 
 def preview_graph(iw: int, ih: int, p: Params, width: int = 1408,
-                  overlay: bool = False) -> str:
+                  n_overlays: int = 0, opacities: list | None = None,
+                  fps: float | None = None) -> str:
     """Graph producing a single downscaled unwrap for the framing preview."""
     k = width / CANVAS_W
     ph = even(CANVAS_H * k)
-    if overlay:
-        a = build_unwrap(iw, ih, p, s=k, out="pre") + overlay_blend(k)
+    if n_overlays:
+        a = (build_unwrap(iw, ih, p, s=k, out="pre") +
+             overlay_blend(n_overlays, k, opacities=opacities, fps=fps))
     else:
         a = build_unwrap(iw, ih, p, s=k)
     return (a + f"[full]scale={even(width)}:{ph}:flags=bilinear[pv]").rstrip(";")
