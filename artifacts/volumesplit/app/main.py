@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import uuid
@@ -15,13 +16,20 @@ from pydantic import BaseModel
 from . import jobs as J
 from . import mapping as M
 
+log = logging.getLogger("uvicorn.error")
+
 app = FastAPI(title="VolumeSplit", version="1.0")
 STATIC = Path(__file__).parent / "static"
 
 
 @app.on_event("startup")
 def _startup():
-    J.start_workers(int(os.environ.get("VS_WORKERS", "1")))
+    workers = int(os.environ.get("VS_WORKERS", "1"))
+    log.info(
+        "VolumeSplit starting — data=%s  uploads=%s  jobs=%s  workers=%d",
+        J.DATA, J.UPLOADS, J.JOBS, workers,
+    )
+    J.start_workers(workers)
 
 
 # ------------------------------------------------------------------ models ---

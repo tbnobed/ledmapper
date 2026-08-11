@@ -1,0 +1,16 @@
+# Ignore all uploaded plates and job outputs — these are large binary files
+# and are stored on the server's local filesystem (or a Docker named volume).
+# The empty directory structure is tracked via .gitkeep files so the server
+# can start without needing to create these directories manually.
+
+# Plate uploads
+uploads/*
+!uploads/.gitkeep
+
+# Job outputs (encoded videos, ZIPs, logs)
+jobs/*/
+!jobs/.gitkeep
+
+# Presets ARE small JSON and are committed so they survive a fresh clone.
+# To opt them out too, uncomment:
+# presets.json
