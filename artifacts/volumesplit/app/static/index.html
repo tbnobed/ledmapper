@@ -161,6 +161,7 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
       <option value="canvas">Canvas 4:1</option>
     </select>
     <button class="btn sm" id="btnGen">Generate</button>
+    <button class="btn sm" id="btnAnimate" title="Animate the selected still plate with this motion prompt (dust, flares, atmosphere). Camera stays locked.">Animate</button>
   </div>
 
   <div class="drop" id="drop" tabindex="0" role="button">
@@ -531,6 +532,32 @@ $("btnGen").addEventListener("click",async function(){
 });
 $("genPrompt").addEventListener("keydown",function(e){
   if(e.key==="Enter")$("btnGen").click();
+});
+$("btnAnimate").addEventListener("click",async function(){
+  if(!SRC){toast("Pick a still plate to animate first.");return;}
+  if(SRC.kind==="video"){toast("That plate is already a video.");return;}
+  const prompt=$("genPrompt").value.trim();
+  if(!prompt){toast("Describe the motion \u2014 e.g. drifting dust, slow sun flares.");return;}
+  const b=$("btnAnimate");
+  b.disabled=true;b.textContent="Animating\u2026";
+  try{
+    const r=await api("/api/animate",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({source_id:SRC.id,prompt:prompt,duration:5})});
+    const rid=(await r.json()).rid;
+    toast("Animation queued \u2014 usually 1\u20133 minutes.");
+    for(;;){
+      await new Promise(function(res){setTimeout(res,5000);});
+      const s=await (await api("/api/animate/"+rid)).json();
+      if(s.status==="done"){
+        $("genPrompt").value="";
+        await loadSources(s.source.id);
+        toast("Motion plate ready \u2014 "+s.source.width+"x"+s.source.height+" video.");
+        break;
+      }
+    }
+  }catch(e){toast("Animation failed. "+e.message);}
+  finally{b.disabled=false;b.textContent="Animate";}
 });
 $("file").addEventListener("change",function(e){upload(e.target.files[0]);});
 $("btnDelSrc").addEventListener("click",async function(){

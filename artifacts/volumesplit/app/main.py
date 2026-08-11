@@ -145,6 +145,71 @@ def generate(body: GenIn):
     return meta
 
 
+class AnimateIn(BaseModel):
+    source_id: str
+    prompt: str
+    duration: int = 5
+
+
+_animations: dict = {}          # fal request id -> {"prompt": ..., "source_name": ...}
+
+
+@app.post("/api/animate")
+def animate(body: AnimateIn):
+    prompt = body.prompt.strip()
+    if not prompt:
+        raise HTTPException(400, "Prompt is empty.")
+    if body.duration not in (5, 10):
+        raise HTTPException(400, "Duration must be 5 or 10 seconds.")
+    try:
+        src = J.source_path(body.source_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "That plate is no longer on the server.")
+    meta = J.source_meta(body.source_id)
+    if meta.get("kind") == "video":
+        raise HTTPException(400, "Pick a still plate — this animates stills.")
+
+    # send the downscaled proxy: the model outputs 1080p anyway, and the
+    # full-res plate would bloat the request past upload limits
+    psrc, _, _ = J._still_proxy(body.source_id, src, meta)
+    mime = "image/jpeg" if psrc.suffix == ".jpg" else "image/png"
+    try:
+        rid = G.submit_animation(prompt, psrc.read_bytes(), mime, body.duration)
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+    _animations[rid] = {"prompt": prompt, "source_name": meta.get("name", "")}
+    return {"rid": rid}
+
+
+@app.get("/api/animate/{rid}")
+def animate_status(rid: str):
+    if rid not in _animations:
+        raise HTTPException(404, "Unknown animation request.")
+    try:
+        res = G.poll_animation(rid)
+    except RuntimeError as e:
+        _animations.pop(rid, None)
+        raise HTTPException(502, str(e))
+    if res["status"] != "done":
+        return {"status": res["status"]}
+
+    info = _animations.pop(rid)
+    sid = uuid.uuid4().hex[:12]
+    dest = J.UPLOADS / f"{sid}.mp4"
+    dest.write_bytes(res["data"])
+    try:
+        meta = J.probe(dest)
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(502, f"Generated video was not readable. {e}")
+    prompt = info["prompt"]
+    name = "AI motion - " + (prompt[:44] + ("…" if len(prompt) > 44 else ""))
+    meta.update({"id": sid, "name": name, "ext": ".mp4", "generated": True,
+                 "prompt": prompt, "animated_from": info["source_name"]})
+    (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
+    return {"status": "done", "source": meta}
+
+
 @app.get("/api/sources")
 def sources():
     return J.list_sources()
