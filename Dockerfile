@@ -16,9 +16,12 @@ ENV VS_DATA=/data \
     VS_WORKERS=1 \
     VS_ENCODE_THREADS=4 \
     VS_FILTER_THREADS=8 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    # large uploads spool to a temp file before landing in /data/uploads;
+    # the container's /tmp is a small RAM tmpfs, so spool to the data disk
+    TMPDIR=/data/tmp
 
-RUN mkdir -p /data/uploads /data/jobs
+RUN mkdir -p /data/uploads /data/jobs /data/tmp
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \

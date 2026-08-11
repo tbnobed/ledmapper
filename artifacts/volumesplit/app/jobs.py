@@ -27,6 +27,13 @@ PRESETS = DATA / "presets.json"
 for d in (UPLOADS, PROXIES, OVERLAYS, JOBS):
     d.mkdir(parents=True, exist_ok=True)
 
+# large uploads spool to TMPDIR before we stream them into UPLOADS; in the
+# container TMPDIR points at the data disk (the default /tmp is a 2G tmpfs,
+# which silently capped uploads). Make sure the dir exists — /data is a
+# volume mount, so the image's mkdir doesn't cover it.
+if os.environ.get("TMPDIR"):
+    Path(os.environ["TMPDIR"]).mkdir(parents=True, exist_ok=True)
+
 PROXY_W = 2048   # proxy plate width — plenty for a 1408px preview even at high zoom
 _proxy_lock = threading.Lock()
 
