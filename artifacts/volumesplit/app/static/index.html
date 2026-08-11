@@ -465,7 +465,10 @@ function xhrUpload(path,file,label){
     });
     xhr.upload.addEventListener("load",function(){tally("busy",label+" \u2014 server processing\u2026");});
     xhr.addEventListener("load",function(){
-      if(xhr.status>=200&&xhr.status<300){resolve(JSON.parse(xhr.responseText));}
+      if(xhr.status>=200&&xhr.status<300){
+        try{resolve(JSON.parse(xhr.responseText));}
+        catch(e){reject(new Error("unexpected server response"));}
+      }
       else{
         let m=xhr.statusText||("HTTP "+xhr.status);
         try{m=JSON.parse(xhr.responseText).detail||m;}catch(e){}

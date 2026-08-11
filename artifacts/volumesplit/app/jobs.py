@@ -628,7 +628,12 @@ def _run(j: Job):
         flat.unlink(missing_ok=True)
 
     if j.status == "cancelled":
-        shutil.rmtree(outdir, ignore_errors=True)
+        # keep a durable record (job.json) so the cancellation survives a
+        # restart and shows in the list; drop only the partial outputs
+        j.finished = time.time()
+        j.progress = 0.0
+        j.save()
+        prune_job_outputs(j.id)
         return
 
     if rc != 0:
@@ -658,7 +663,6 @@ def _run(j: Job):
 
     j.finished = time.time()
     j.save()
-    _auto_prune_if_needed()
 
 
 def _manifest(j: Job, sizes) -> str:
@@ -693,6 +697,10 @@ def _worker():
             j.error = str(e)
             j.finished = time.time()
             j.save()
+        finally:
+            # single retention point: runs for done, failed (any path),
+            # and cancelled jobs alike
+            _auto_prune_if_needed()
 
 
 def start_workers(n: int = 1):

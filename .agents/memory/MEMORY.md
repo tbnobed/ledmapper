@@ -1,2 +1,3 @@
 - [VolumeSplit preview/encode parity](volumesplit-preview-parity.md) — preview and encode share one ffmpeg graph; previews use scale factor + cached proxy, encodes must stay bit-identical at s=1.
 - [VolumeSplit ambient overlays](volumesplit-ambient-overlays.md) — AI dust/flares are a screen-blended layer on black; the plate never goes through a video model (1080p cap, subject drift).
+- [VolumeSplit prod topology](volumesplit-prod-topology.md) — nginx proxy fronts the container; silent mid-upload failures with clean app logs mean check the proxy, and TMPDIR must point at the data disk.
