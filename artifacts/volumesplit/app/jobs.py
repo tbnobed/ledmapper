@@ -20,10 +20,14 @@ from . import mapping as M
 
 DATA = Path(os.environ.get("VS_DATA", "/data"))
 UPLOADS = DATA / "uploads"
+PROXIES = UPLOADS / "proxies"
 JOBS = DATA / "jobs"
 PRESETS = DATA / "presets.json"
-for d in (UPLOADS, JOBS):
+for d in (UPLOADS, PROXIES, JOBS):
     d.mkdir(parents=True, exist_ok=True)
+
+PROXY_W = 2048   # proxy plate width — plenty for a 1408px preview even at high zoom
+_proxy_lock = threading.Lock()
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".bmp", ".exr"}
 
@@ -90,6 +94,35 @@ def list_sources() -> List[dict]:
 def delete_source(sid: str):
     for p in UPLOADS.glob(f"{sid}.*"):
         p.unlink(missing_ok=True)
+    (PROXIES / f"{sid}.jpg").unlink(missing_ok=True)
+
+
+def _still_proxy(sid: str, src: Path, meta: dict) -> tuple[Path, int, int]:
+    """Downscaled copy of a still plate for fast previews. Lazily built, cached.
+
+    Geometry is safe because fit_chain works in ratios (zoom/pan are relative),
+    so a proxy of the same aspect produces an identical preview frame.
+    """
+    iw, ih = meta["width"], meta["height"]
+    if iw <= PROXY_W:
+        return src, iw, ih
+    pw = PROXY_W - (PROXY_W % 2)
+    ph = int(round(ih * pw / iw)) & ~1
+    dest = PROXIES / f"{sid}.jpg"
+    if not dest.exists():
+        with _proxy_lock:
+            if not dest.exists():       # re-check: another request may have built it
+                tmp = PROXIES / f".{sid}.{uuid.uuid4().hex[:8]}.jpg"
+                r = subprocess.run(
+                    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+                     "-vf", f"scale={pw}:{ph}:flags=lanczos", "-frames:v", "1",
+                     "-c:v", "mjpeg", "-q:v", "2", str(tmp)],
+                    capture_output=True, timeout=120)
+                if r.returncode != 0 or not tmp.exists():
+                    tmp.unlink(missing_ok=True)
+                    return src, iw, ih  # fall back to the full-res plate
+                os.replace(tmp, dest)   # atomic publish — readers never see a partial file
+    return dest, pw, ph
 
 
 # --------------------------------------------------------------- previews ----
@@ -99,7 +132,10 @@ def render_preview(sid: str, p: M.Params, timecode: float = 0.0,
     """One downscaled unwrap frame, straight to stdout. Never touches disk."""
     src = source_path(sid)
     meta = source_meta(sid)
-    graph = M.preview_graph(meta["width"], meta["height"], p, width)
+    iw, ih = meta["width"], meta["height"]
+    if meta.get("kind") != "video":
+        src, iw, ih = _still_proxy(sid, src, meta)
+    graph = M.preview_graph(iw, ih, p, width)
 
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
     if meta.get("kind") == "video" and timecode > 0:

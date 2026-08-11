@@ -72,7 +72,7 @@ Mount your plate storage over `/data/uploads` in `docker-compose.yml` to pull so
 
 ## User preferences
 
-_Populate as you build._
+- NEVER propose or suggest project tasks. Fix issues directly instead of creating tasks for them.
 
 ## Gotchas
 

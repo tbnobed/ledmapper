@@ -137,29 +137,35 @@ def _mirror_panel(src: str, out: str, sample: int, panel_w: int, panel_h: int,
     return "".join(parts)
 
 
-def build_unwrap(iw: int, ih: int, p: Params) -> str:
-    """Graph fragment producing [full] = the 11264x2560 unwrap."""
+def build_unwrap(iw: int, ih: int, p: Params, s: float = 1.0) -> str:
+    """Graph fragment producing [full] = the unwrap (11264x2560 at s=1).
+
+    s < 1 composes the whole graph at reduced scale — used by previews so the
+    mirror/blur/hstack work happens on ~10x fewer pixels. Encodes use s=1.
+    """
     g: List[str] = []
     if p.mode == "canvas":
-        g.append("[0:v]" + ",".join(fit_chain(iw, ih, CANVAS_W, CANVAS_H, p)) + "[full];")
+        g.append("[0:v]" + ",".join(
+            fit_chain(iw, ih, even(CANVAS_W * s), even(CANVAS_H * s), p)) + "[full];")
         return "".join(g)
 
-    cw, ch = WALLS["center"]["w"], WALLS["center"]["h"]
+    cw, ch = even(WALLS["center"]["w"] * s), even(WALLS["center"]["h"] * s)
     g.append("[0:v]" + ",".join(fit_chain(iw, ih, cw, ch, p)) + "[cen0];")
     g.append("[cen0]split=3[cenA][cenL][cenR];")
 
-    lw, rw = WALLS["left"]["w"], WALLS["right"]["w"]
-    samp = max(16, min(p.extend_width, cw))
+    lw, rw = even(WALLS["left"]["w"] * s), even(WALLS["right"]["w"] * s)
+    samp = max(16, min(even(p.extend_width * s), cw))
 
     if p.extend == "black":
         g.append("[cenL]nullsink;[cenR]nullsink;")
         g.append(f"color=c=black:s={lw}x{ch}[lp];")
         g.append(f"color=c=black:s={rw}x{ch}[rp];")
     elif p.extend == "edge":
-        g.append(f"[cenL]crop=8:{ch}:0:0,scale={lw}:{ch}[lp];")
-        g.append(f"[cenR]crop=8:{ch}:{cw - 8}:0,scale={rw}:{ch}[rp];")
+        es = max(2, even(8 * s))        # 8px strip at s=1, scaled for previews
+        g.append(f"[cenL]crop={es}:{ch}:0:0,scale={lw}:{ch}[lp];")
+        g.append(f"[cenR]crop={es}:{ch}:{cw - es}:0,scale={rw}:{ch}[rp];")
     else:
-        blur = 90 if p.extend == "blur" else 0
+        blur = max(2, round(90 * s)) if p.extend == "blur" else 0
         g.append(f"[cenL]crop={samp}:{ch}:0:0[lstrip];")
         g.append(f"[cenR]crop={samp}:{ch}:{cw - samp}:0[rstrip];")
         g.append(_mirror_panel("lstrip", "lp", samp, lw, ch, "right", blur))
@@ -235,7 +241,7 @@ def preview_graph(iw: int, ih: int, p: Params, width: int = 1408) -> str:
     """Graph producing a single downscaled unwrap for the framing preview."""
     k = width / CANVAS_W
     ph = even(CANVAS_H * k)
-    return (build_unwrap(iw, ih, p) +
+    return (build_unwrap(iw, ih, p, s=k) +
             f"[full]scale={even(width)}:{ph}:flags=bilinear[pv]").rstrip(";")
 
 

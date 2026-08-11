@@ -1,0 +1,1 @@
+- [VolumeSplit preview/encode parity](volumesplit-preview-parity.md) — preview and encode share one ffmpeg graph; previews use scale factor + cached proxy, encodes must stay bit-identical at s=1.
