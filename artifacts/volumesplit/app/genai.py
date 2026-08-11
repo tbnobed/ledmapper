@@ -29,10 +29,20 @@ SIZES = {
 
 # AI upscale pass after generation: reconstructs real texture instead of the
 # soft blur plain resampling gives when the plate is stretched to wall res.
-# Factors chosen so the result meets or beats the wall's native pixel count
-# (center wall 6144 wide, full canvas 11264 wide).
+# The upscaler rejects outputs much past ~30 MP (422 "image is too large"),
+# so the factor is derived per plate: the largest whole multiple that stays
+# under the cap, at most the ideal for the target wall size.
 UPSCALE_URL = "https://fal.run/fal-ai/clarity-upscaler"
-UPSCALE_FACTOR = {"center": 2, "canvas": 3}
+UPSCALE_IDEAL = {"center": 2, "canvas": 3}
+UPSCALE_MAX_MP = 29_000_000
+
+
+def safe_upscale_factor(w: int, h: int, target: str) -> int:
+    ideal = UPSCALE_IDEAL.get(target, 2)
+    f = ideal
+    while f > 1 and w * h * f * f > UPSCALE_MAX_MP:
+        f -= 1
+    return f
 
 
 def generate_plate(prompt: str, target: str = "center") -> bytes:
@@ -73,10 +83,12 @@ def generate_plate(prompt: str, target: str = "center") -> bytes:
     # generation; the caller surfaces upscale_error to the operator.
     upscale_error = None
     fetch_url = src_url
-    try:
-        fetch_url = upscale_image(src_url, UPSCALE_FACTOR.get(target, 2))
-    except Exception as e:
-        upscale_error = str(e)[:300]
+    factor = safe_upscale_factor(w, h, target)
+    if factor > 1:
+        try:
+            fetch_url = upscale_image(src_url, factor)
+        except Exception as e:
+            upscale_error = str(e)[:300]
 
     with urllib.request.urlopen(fetch_url, timeout=300) as r:
         data = r.read()
