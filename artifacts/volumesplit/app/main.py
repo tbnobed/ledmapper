@@ -121,6 +121,19 @@ def rm_source(sid: str):
     return {"ok": True}
 
 
+@app.delete("/api/sources")
+def rm_unused_sources():
+    """Delete all source plates that are not referenced by any queued or running job."""
+    active_sids = {j["source_id"] for j in J.list_jobs()
+                   if j["status"] in ("queued", "running")}
+    removed = 0
+    for src in J.list_sources():
+        if src["id"] not in active_sids:
+            J.delete_source(src["id"])
+            removed += 1
+    return {"ok": True, "removed": removed}
+
+
 # ------------------------------------------------------------------ preview --
 
 @app.post("/api/preview")
@@ -206,6 +219,13 @@ def rm_job(jid: str):
         shutil.rmtree(j.dir(), ignore_errors=True)
         J._jobs.pop(jid, None)
     return {"ok": True}
+
+
+@app.post("/api/jobs/prune")
+def prune_jobs():
+    """Remove encoded outputs for all done/failed/cancelled jobs; keep job records."""
+    count = J.prune_done_jobs()
+    return {"ok": True, "pruned": count}
 
 
 # ----------------------------------------------------------------- presets ---

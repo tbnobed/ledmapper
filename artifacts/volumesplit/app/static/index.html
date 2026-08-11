@@ -150,6 +150,7 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
     <select id="srcSel"><option value="">&mdash; no plate loaded &mdash;</option></select>
     <button class="btn sm" id="btnBrowse">Upload</button>
     <button class="btn sm" id="btnDelSrc">Remove</button>
+    <button class="btn sm" id="btnDelUnused" title="Delete all plate files that are not used by any queued or running job">Remove unused</button>
     <input type="file" id="file" accept="image/*,video/*" class="hidden">
   </div>
 
@@ -200,6 +201,7 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
   <div class="grp">
     <h2>Jobs</h2>
     <div id="jobs"><div style="color:var(--faint);font-family:var(--mono);font-size:10.5px">Nothing queued.</div></div>
+    <button class="btn sm" id="btnPrune" style="margin-top:10px" title="Free disk space by removing encoded outputs for all completed, failed, and cancelled jobs. The job record is kept.">Prune outputs</button>
   </div>
 </div>
 </main>
@@ -475,6 +477,14 @@ $("tc").addEventListener("input",function(){
 $("btnResetFrame").addEventListener("click",function(){
   P.zoom=1;P.pan_x=0;P.pan_y=0;syncUI();refresh();});
 $("btnRun").addEventListener("click",runJob);
+$("btnPrune").addEventListener("click",async function(){
+  try{
+    const r=await (await api("/api/jobs/prune",{method:"POST"})).json();
+    if(r.pruned===0){toast("No completed job outputs to prune.");}
+    else{toast("Pruned outputs for "+r.pruned+" job"+(r.pruned===1?"":"s")+". Disk space reclaimed.");}
+    refreshJobs();
+  }catch(e){toast("Prune failed. "+e.message);}
+});
 $("srcSel").addEventListener("change",function(e){pickSource(e.target.value);});
 $("btnBrowse").addEventListener("click",function(){$("file").click();});
 $("file").addEventListener("change",function(e){upload(e.target.files[0]);});
@@ -482,6 +492,14 @@ $("btnDelSrc").addEventListener("click",async function(){
   if(!SRC)return;
   await api("/api/sources/"+SRC.id,{method:"DELETE"});
   await loadSources();
+});
+$("btnDelUnused").addEventListener("click",async function(){
+  try{
+    const r=await (await api("/api/sources",{method:"DELETE"})).json();
+    if(r.removed===0){toast("No unused plates to remove.");}
+    else{toast("Removed "+r.removed+" unused plate"+(r.removed===1?"":"s")+".");}
+    await loadSources();
+  }catch(e){toast("Remove unused failed. "+e.message);}
 });
 $("codec").addEventListener("change",function(e){
   ENC.codec=e.target.value;

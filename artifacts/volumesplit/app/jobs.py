@@ -193,6 +193,56 @@ def submit(source_id: str, params: M.Params, encode: dict) -> Job:
     return j
 
 
+VS_MAX_JOBS = int(os.environ.get("VS_MAX_JOBS", "0"))   # 0 = unlimited
+
+
+def prune_job_outputs(jid: str) -> bool:
+    """Delete encoded files and ZIP for a job, keep job.json. Returns True if job existed."""
+    j = _jobs.get(jid)
+    if not j:
+        return False
+    jdir = j.dir()
+    if jdir.exists():
+        for f in jdir.iterdir():
+            if f.name != "job.json":
+                try:
+                    if f.is_dir():
+                        shutil.rmtree(f, ignore_errors=True)
+                    else:
+                        f.unlink(missing_ok=True)
+                except Exception:
+                    pass
+    j.outputs = []
+    j.save()
+    return True
+
+
+def prune_done_jobs() -> int:
+    """Remove output files for all done/failed/cancelled jobs. Returns count pruned."""
+    with _lock:
+        targets = [j.id for j in _jobs.values()
+                   if j.status in ("done", "failed", "cancelled")]
+    pruned = 0
+    for jid in targets:
+        if prune_job_outputs(jid):
+            pruned += 1
+    return pruned
+
+
+def _auto_prune_if_needed():
+    """If VS_MAX_JOBS is set, prune outputs of oldest completed jobs beyond the limit."""
+    if VS_MAX_JOBS <= 0:
+        return
+    with _lock:
+        done = sorted(
+            [j for j in _jobs.values() if j.status in ("done", "failed", "cancelled")],
+            key=lambda x: x.finished or x.created,
+        )
+    excess = done[:max(0, len(done) - VS_MAX_JOBS)]
+    for j in excess:
+        prune_job_outputs(j.id)
+
+
 def cancel(jid: str) -> bool:
     j = _jobs.get(jid)
     if not j:
@@ -337,6 +387,7 @@ def _run(j: Job):
 
     j.finished = time.time()
     j.save()
+    _auto_prune_if_needed()
 
 
 def _manifest(j: Job, sizes) -> str:
