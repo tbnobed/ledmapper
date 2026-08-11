@@ -104,9 +104,16 @@ def submit_animation(prompt: str, image_data: bytes, mime: str,
     """
     uri = f"data:{mime};base64," + base64.b64encode(image_data).decode()
     d = _fal_json(f"{FAL_QUEUE}/{ANIMATE_MODEL}", {
-        "prompt": prompt,
+        "prompt": ("Locked-off static camera. Keep the composition, framing, "
+                   "subjects and lighting exactly as in the reference image. "
+                   "The only change is: " + prompt),
         "image_url": uri,
+        "end_image_url": uri,       # end on the start frame: kills composition
+                                    # drift and makes the loop seam exact
         "resolution": "1080p",
+        # "auto" collapses to ~square on our extreme wide plates; 21:9 is the
+        # widest the model accepts and closest to the 2.4:1 center wall
+        "aspect_ratio": "21:9",
         "duration": str(duration),
         "camera_fixed": True,
     })
