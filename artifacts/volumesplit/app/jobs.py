@@ -346,6 +346,7 @@ def load_jobs():
             _jobs[j.id] = j
         except Exception:
             pass
+    _auto_prune_if_needed()     # enforce retention on old records at startup
 
 
 def list_jobs() -> List[dict]:
@@ -372,7 +373,12 @@ def submit(source_id: str, params: M.Params, encode: dict) -> Job:
     return j
 
 
-VS_MAX_JOBS = int(os.environ.get("VS_MAX_JOBS", "0"))   # 0 = unlimited
+# retention: outputs of the newest VS_MAX_JOBS finished jobs are kept on
+# disk (older ones are pruned to just their job record); job records beyond
+# VS_MAX_JOB_RECORDS are removed entirely so the list can't grow forever.
+# 0 = unlimited. Queued/running jobs are never touched.
+VS_MAX_JOBS = int(os.environ.get("VS_MAX_JOBS", "15"))
+VS_MAX_JOB_RECORDS = int(os.environ.get("VS_MAX_JOB_RECORDS", "50"))
 
 
 def prune_job_outputs(jid: str) -> bool:
@@ -409,17 +415,21 @@ def prune_done_jobs() -> int:
 
 
 def _auto_prune_if_needed():
-    """If VS_MAX_JOBS is set, prune outputs of oldest completed jobs beyond the limit."""
-    if VS_MAX_JOBS <= 0:
-        return
+    """Enforce retention: prune outputs beyond VS_MAX_JOBS, then drop job
+    records (and their directories) beyond VS_MAX_JOB_RECORDS."""
     with _lock:
         done = sorted(
             [j for j in _jobs.values() if j.status in ("done", "failed", "cancelled")],
             key=lambda x: x.finished or x.created,
         )
-    excess = done[:max(0, len(done) - VS_MAX_JOBS)]
-    for j in excess:
-        prune_job_outputs(j.id)
+    if VS_MAX_JOBS > 0:
+        for j in done[:max(0, len(done) - VS_MAX_JOBS)]:
+            prune_job_outputs(j.id)
+    if VS_MAX_JOB_RECORDS > 0:
+        for j in done[:max(0, len(done) - VS_MAX_JOB_RECORDS)]:
+            with _lock:
+                _jobs.pop(j.id, None)
+            shutil.rmtree(j.dir(), ignore_errors=True)
 
 
 def cancel(jid: str) -> bool:

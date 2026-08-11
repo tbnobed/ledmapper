@@ -12,6 +12,9 @@ services:
       # encode tuning — read at container start, restart to apply (no rebuild)
       VS_ENCODE_THREADS: "${VS_ENCODE_THREADS:-10}"   # x264 threads per output encoder
       VS_FILTER_THREADS: "${VS_FILTER_THREADS:-16}"   # unwrap/blend graph threads
+      # retention — keeps disk and the jobs list from growing forever (0 = unlimited)
+      VS_MAX_JOBS: "${VS_MAX_JOBS:-15}"               # newest finished jobs that keep outputs on disk
+      VS_MAX_JOB_RECORDS: "${VS_MAX_JOB_RECORDS:-50}" # job records kept in the list at all
     volumes:
       - vs-data:/data
       # bind-mount your plate storage to pull sources straight off the share:

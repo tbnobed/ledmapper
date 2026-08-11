@@ -460,6 +460,8 @@ async function upload(f){
 }
 
 let pollTimer=null;
+const JOBS_PAGE=12;
+let JOBS_SHOWN=JOBS_PAGE;
 async function refreshJobs(){
   let list=[];
   try{list=await (await api("/api/jobs")).json();}catch(e){return;}
@@ -468,7 +470,7 @@ async function refreshJobs(){
     wrap.innerHTML='<div style="color:var(--faint);font-family:var(--mono);font-size:10.5px">Nothing queued.</div>';
   }else{
     wrap.innerHTML="";
-    list.slice(0,12).forEach(function(j){
+    list.slice(0,JOBS_SHOWN).forEach(function(j){
       const d=document.createElement("div");
       d.className="job "+j.status;
       const links=(j.outputs||[]).map(function(o){
@@ -510,6 +512,19 @@ async function refreshJobs(){
       }
       wrap.appendChild(d);
     });
+    if(list.length>JOBS_PAGE){
+      const m=document.createElement("button");
+      m.className="btn sm";
+      m.style.marginTop="8px";
+      if(list.length>JOBS_SHOWN){
+        m.textContent="Show all ("+list.length+")";
+        m.addEventListener("click",function(){JOBS_SHOWN=list.length+1000;refreshJobs();});
+      }else{
+        m.textContent="Show fewer";
+        m.addEventListener("click",function(){JOBS_SHOWN=JOBS_PAGE;refreshJobs();});
+      }
+      wrap.appendChild(m);
+    }
   }
   const active=list.some(function(j){return j.status==="running"||j.status==="queued";});
   if(active)tally("busy","Encoding");
