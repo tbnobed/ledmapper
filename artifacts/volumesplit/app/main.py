@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import genai as G
 from . import jobs as J
 from . import mapping as M
 
@@ -106,6 +107,40 @@ async def upload(file: UploadFile = File(...)):
         raise HTTPException(400, f"Could not read that file. {e}")
 
     meta.update({"id": sid, "name": file.filename or dest.name, "ext": ext})
+    (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
+    return meta
+
+
+class GenIn(BaseModel):
+    prompt: str
+    target: str = "center"      # "center" (2.4:1) or "canvas" (4:1)
+
+
+@app.post("/api/generate")
+def generate(body: GenIn):
+    prompt = body.prompt.strip()
+    if not prompt:
+        raise HTTPException(400, "Prompt is empty.")
+    if body.target not in G.SIZES:
+        raise HTTPException(400, "Unknown target.")
+    try:
+        data = G.generate_plate(prompt, body.target)
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+    sid = uuid.uuid4().hex[:12]
+    ext = ".png" if data[:4] == b"\x89PNG" else ".jpg"
+    dest = J.UPLOADS / f"{sid}{ext}"
+    dest.write_bytes(data)
+    try:
+        meta = J.probe(dest)
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(502, f"Generated file was not readable. {e}")
+
+    name = "AI - " + (prompt[:48] + ("…" if len(prompt) > 48 else ""))
+    meta.update({"id": sid, "name": name, "ext": ext, "generated": True,
+                 "prompt": prompt})
     (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
     return meta
 

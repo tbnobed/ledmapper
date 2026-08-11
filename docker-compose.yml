@@ -8,6 +8,7 @@ services:
     environment:
       VS_DATA: /data
       VS_WORKERS: "1"          # ffmpeg saturates cores; raise only with headroom
+      FAL_KEY: "${FAL_KEY:-}"  # fal.ai API key for AI plate generation (put it in .env)
     volumes:
       - vs-data:/data
       # bind-mount your plate storage to pull sources straight off the share:

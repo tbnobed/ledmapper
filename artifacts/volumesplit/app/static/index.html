@@ -154,6 +154,15 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
     <input type="file" id="file" accept="image/*,video/*" class="hidden">
   </div>
 
+  <div class="srcbar" id="genBar">
+    <input type="text" id="genPrompt" placeholder="describe a plate to generate &mdash; e.g. dusty desert battlefield at golden hour, cinematic haze" style="flex:1">
+    <select id="genTarget">
+      <option value="center">Center 2.4:1</option>
+      <option value="canvas">Canvas 4:1</option>
+    </select>
+    <button class="btn sm" id="btnGen">Generate</button>
+  </div>
+
   <div class="drop" id="drop" tabindex="0" role="button">
     <strong>Drop a plate here</strong>
     <span>image or video &middot; uploads to the server, nothing runs in your browser</span>
@@ -504,6 +513,25 @@ $("btnPrune").addEventListener("click",async function(){
 });
 $("srcSel").addEventListener("change",function(e){pickSource(e.target.value);});
 $("btnBrowse").addEventListener("click",function(){$("file").click();});
+$("btnGen").addEventListener("click",async function(){
+  const prompt=$("genPrompt").value.trim();
+  if(!prompt){toast("Describe the plate you want first.");return;}
+  const b=$("btnGen");
+  b.disabled=true;b.textContent="Generating\u2026";
+  try{
+    const r=await api("/api/generate",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({prompt:prompt,target:$("genTarget").value})});
+    const meta=await r.json();
+    $("genPrompt").value="";
+    await loadSources(meta.id);
+    toast("Plate generated \u2014 "+meta.width+"x"+meta.height+".");
+  }catch(e){toast("Generation failed. "+e.message);}
+  finally{b.disabled=false;b.textContent="Generate";}
+});
+$("genPrompt").addEventListener("keydown",function(e){
+  if(e.key==="Enter")$("btnGen").click();
+});
 $("file").addEventListener("change",function(e){upload(e.target.files[0]);});
 $("btnDelSrc").addEventListener("click",async function(){
   if(!SRC)return;
