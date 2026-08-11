@@ -226,6 +226,43 @@ def animate_status(rid: str):
     return {"status": "done", "source": meta}
 
 
+@app.post("/api/sources/{sid}/overlay")
+async def upload_overlay(sid: str, file: UploadFile = File(...)):
+    """Attach an uploaded video (e.g. stock dust/flare footage shot on black)
+    as the ambient layer for a still plate. Blended with screen blend, so the
+    layer's black stays invisible; the plate keeps full resolution."""
+    meta = J.source_meta(sid)
+    if not meta:
+        raise HTTPException(404, "That plate is no longer on the server.")
+    if meta.get("kind") == "video":
+        raise HTTPException(400, "Layers go on still plates.")
+
+    tmp = J.OVERLAYS / f".{sid}.{uuid.uuid4().hex[:8]}{Path(file.filename or '.mp4').suffix or '.mp4'}"
+    with tmp.open("wb") as f:
+        while chunk := await file.read(1 << 22):
+            f.write(chunk)
+    try:
+        ometa = J.probe(tmp)
+        if ometa["kind"] != "video":
+            raise ValueError("that file is a still image, not a video")
+    except Exception as e:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(400, f"Could not use that file as a layer. {e}")
+
+    with J._overlay_lock:
+        if not J.source_meta(sid):
+            tmp.unlink(missing_ok=True)
+            raise HTTPException(404, "That plate was removed.")
+        os.replace(tmp, J.overlay_path(sid))
+        meta = J.source_meta(sid)
+        meta["overlay"] = {"prompt": file.filename or "uploaded layer",
+                           "duration": ometa["duration"], "fps": ometa["fps"],
+                           "width": ometa["width"], "height": ometa["height"],
+                           "uploaded": True}
+        (J.UPLOADS / f"{sid}.json").write_text(__import__("json").dumps(meta))
+    return {"ok": True, "source": meta}
+
+
 @app.delete("/api/sources/{sid}/overlay")
 def rm_overlay(sid: str):
     with J._overlay_lock:

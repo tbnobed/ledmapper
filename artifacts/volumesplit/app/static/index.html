@@ -162,7 +162,9 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
     </select>
     <button class="btn sm" id="btnGen">Generate</button>
     <button class="btn sm" id="btnAnimate" title="Generate an ambient layer (dust, flares, atmosphere) and blend it over the selected still. The plate itself stays at full resolution.">Add layer</button>
+    <button class="btn sm" id="btnUpLayer" title="Attach your own video (dust, flares, snow shot on black) as the ambient layer for the selected still. Screen-blended, so black stays invisible.">Upload layer</button>
     <button class="btn sm hidden" id="btnRmLayer" title="Remove the ambient layer from this plate">Remove layer</button>
+    <input type="file" id="layerFile" accept="video/*" class="hidden">
   </div>
 
   <div class="drop" id="drop" tabindex="0" role="button">
@@ -566,6 +568,25 @@ $("btnAnimate").addEventListener("click",async function(){
     }
   }catch(e){toast("Layer generation failed. "+e.message);}
   finally{b.disabled=false;b.textContent="Add layer";}
+});
+$("btnUpLayer").addEventListener("click",function(){
+  if(!SRC){toast("Pick a still plate first.");return;}
+  if(SRC.kind==="video"){toast("Layers go on still plates.");return;}
+  $("layerFile").click();
+});
+$("layerFile").addEventListener("change",async function(e){
+  const f=e.target.files[0];e.target.value="";
+  if(!f||!SRC)return;
+  const b=$("btnUpLayer");
+  b.disabled=true;b.textContent="Uploading\u2026";
+  try{
+    const fd=new FormData();fd.append("file",f);
+    const r=await api("/api/sources/"+SRC.id+"/overlay",{method:"POST",body:fd});
+    const s=await r.json();
+    await loadSources(SRC.id);
+    toast("Layer attached \u2014 "+s.source.overlay.duration.toFixed(1)+"s, blended over the full-res plate.");
+  }catch(err){toast("Layer upload failed. "+err.message);}
+  finally{b.disabled=false;b.textContent="Upload layer";}
 });
 $("btnRmLayer").addEventListener("click",async function(){
   if(!SRC||!SRC.overlay)return;
