@@ -36,7 +36,7 @@ def _startup():
 # ------------------------------------------------------------------ models ---
 
 class ParamsIn(BaseModel):
-    mode: str = "center"
+    mode: str = "canvas"
     fit: str = "cover"
     zoom: float = 1.0
     pan_x: float = 0.0

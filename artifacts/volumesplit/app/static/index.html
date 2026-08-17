@@ -104,8 +104,8 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
   <div class="grp">
     <h2>Mapping</h2>
     <div class="field"><label>Mode</label>
-      <div class="seg" id="segMode"><button data-v="center" aria-pressed="true">Center</button><button data-v="canvas">Canvas</button></div>
-      <div class="hint" id="modeHint">Plate fills the center wall (2.4:1); side walls extend outward.</div>
+      <div class="seg" id="segMode"><button data-v="center">Center</button><button data-v="canvas" aria-pressed="true">Canvas</button></div>
+      <div class="hint" id="modeHint">Plate spread across the full 4.4:1 unwrap. Needs a natively wide plate.</div>
     </div>
     <div class="field"><label>Fit</label>
       <div class="seg" id="segFit"><button data-v="cover" aria-pressed="true">Cover</button><button data-v="contain">Contain</button><button data-v="stretch">Stretch</button></div>
@@ -129,7 +129,7 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
     <button class="btn" id="btnResetFrame" style="margin-top:10px">Reset framing</button>
   </div>
 
-  <div class="grp" id="grpExtend">
+  <div class="grp hidden" id="grpExtend">
     <h2>Side walls</h2>
     <div class="field"><label>Fill</label>
       <div class="seg" id="segExtend"><button data-v="mirror" aria-pressed="true">Mirror</button><button data-v="blur">Blur</button><button data-v="edge">Edge</button><button data-v="black">Black</button></div>
@@ -229,7 +229,7 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
 <script>
 "use strict";
 let CFG=null, SRC=null, SOURCES=[];
-const P={mode:"center",fit:"cover",zoom:1,pan_x:0,pan_y:0,valign:"bottom",
+const P={mode:"canvas",fit:"cover",zoom:1,pan_x:0,pan_y:0,valign:"bottom",
          extend:"mirror",extend_width:1024,outputs:"machine",grid:false,
          cap_top:false};
 const ENC={codec:"hapq",image_format:"png"};

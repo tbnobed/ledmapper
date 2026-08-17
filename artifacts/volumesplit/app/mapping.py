@@ -54,7 +54,7 @@ def even(v: float) -> int:
 
 @dataclass
 class Params:
-    mode: str = "center"          # center | canvas
+    mode: str = "canvas"          # center | canvas
     fit: str = "cover"            # cover | contain | stretch | none
     zoom: float = 1.0
     pan_x: float = 0.0
