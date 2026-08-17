@@ -64,6 +64,7 @@ class Params:
     extend_width: int = 1024
     outputs: str = "machine"      # machine | walls | both
     grid: bool = False
+    cap_top: bool = False         # black-fill center rows outside the side-wall band
 
     def dict(self):
         return asdict(self)
@@ -218,6 +219,38 @@ def overlay_blend(n: int, s: float = 1.0, src: str = "pre", out: str = "full",
     return g + f"[ob{n}]format=yuv420p[{out}];"
 
 
+def cap_strips(p: Params) -> List[Tuple[int, int]]:
+    """(y, h) rows of the CENTER wall lying outside the side-wall band.
+
+    The sides are 2048 tall vs the center's 2560; when content must stay in
+    the common band (all three walls show the same vertical range), the
+    center's extra rows are filled with pure black. Which rows depends on
+    the deck line: bottom-aligned sides leave a 512px strip at the top,
+    top-aligned at the bottom, centered leaves 256px on both.
+    """
+    if not p.cap_top:
+        return []
+    boxes = wall_boxes(p.valign)
+    _, sy, _, sh = boxes["left"]
+    ch = WALLS["center"]["h"]
+    strips = []
+    if sy > 0:
+        strips.append((0, sy))
+    if sy + sh < ch:
+        strips.append((sy + sh, ch - (sy + sh)))
+    return strips
+
+
+def _cap_filter(p: Params, s: float = 1.0, x: int = 0, w: int | None = None) -> str:
+    """drawbox chain blacking the cap strips, at scale s, offset x (unwrap
+    coords) with width w. Empty string when the cap is off."""
+    w = WALLS["center"]["w"] if w is None else w
+    return ",".join(
+        f"drawbox=x={even(x * s)}:y={even(y * s)}:w={even(w * s)}:"
+        f"h={even(h * s)}:color=black:t=fill"
+        for y, h in cap_strips(p))
+
+
 def _grid_overlay(label: str, w: int, h: int, out: str) -> str:
     """Draw the cabinet grid over a wall stream."""
     lines = []
@@ -242,10 +275,15 @@ def build_outputs(p: Params) -> Tuple[str, Dict[str, Tuple[int, int]]]:
     sizes: Dict[str, Tuple[int, int]] = {}
     cx, cy, cwd, chd = boxes["center"]
 
+    cen_base = "W_center"
+    cap = _cap_filter(p)          # wall-local coords: center box starts at y=0
+    if cap:
+        g.append(f"[{cen_base}]{cap}[W_cap];")
+        cen_base = "W_cap"
     if p.grid:
-        g.append(_grid_overlay("W_center", cwd, chd, "center"))
+        g.append(_grid_overlay(cen_base, cwd, chd, "center"))
     else:
-        g.append("[W_center]null[center];")
+        g.append(f"[{cen_base}]null[center];")
     sizes["center"] = (cwd, chd)
 
     for n in ("left", "right"):
@@ -296,7 +334,9 @@ def preview_graph(iw: int, ih: int, p: Params, width: int = 1408,
              overlay_blend(n_overlays, k, opacities=opacities, fps=fps))
     else:
         a = build_unwrap(iw, ih, p, s=k)
-    return (a + f"[full]scale={even(width)}:{ph}:flags=bilinear[pv]").rstrip(";")
+    cap = _cap_filter(p, s=k, x=WALLS["left"]["w"])
+    return (a + "[full]" + (cap + "," if cap else "")
+            + f"scale={even(width)}:{ph}:flags=bilinear[pv]").rstrip(";")
 
 
 # ------------------------------------------------------------------ codecs ---

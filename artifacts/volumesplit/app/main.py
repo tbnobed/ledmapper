@@ -46,6 +46,7 @@ class ParamsIn(BaseModel):
     extend_width: int = 1024
     outputs: str = "machine"
     grid: bool = False
+    cap_top: bool = False
 
     def to_params(self) -> M.Params:
         return M.Params(**self.model_dump()).validate()

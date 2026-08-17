@@ -114,6 +114,10 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
       <div class="seg" id="segValign"><button data-v="bottom" aria-pressed="true">Bottom</button><button data-v="center">Center</button><button data-v="top">Top</button></div>
       <div class="hint">Bottom = all three walls on a common deck, horizon continuous.</div>
     </div>
+    <div class="field"><label>Cap center</label>
+      <div class="seg" id="segCap"><button data-v="off" aria-pressed="true">Off</button><button data-v="on">Black</button></div>
+      <div class="hint">Black-fills the center wall above the side-wall band &mdash; content stays in the common 2048px range.</div>
+    </div>
   </div>
 
   <div class="grp">
@@ -226,7 +230,8 @@ input[type=text]:focus,select:focus{outline:none;border-color:var(--amber)}
 "use strict";
 let CFG=null, SRC=null, SOURCES=[];
 const P={mode:"center",fit:"cover",zoom:1,pan_x:0,pan_y:0,valign:"bottom",
-         extend:"mirror",extend_width:1024,outputs:"machine",grid:false};
+         extend:"mirror",extend_width:1024,outputs:"machine",grid:false,
+         cap_top:false};
 const ENC={codec:"hapq",image_format:"png"};
 let TC=0;
 const $=id=>document.getElementById(id);
@@ -606,6 +611,7 @@ seg("segFit","fit");
 seg("segValign","valign");
 seg("segExtend","extend");
 seg("segGrid","grid");
+seg("segCap","cap_top");
 seg("segOutputs","outputs",function(v){
   $("outHint").textContent=({machine:"center + sides - one file per render node.",
     walls:"left + center + right - one file per wall.",
@@ -634,6 +640,10 @@ function syncUI(){
    ["segExtend","extend"],["segOutputs","outputs"]].forEach(function(pair){
     Array.prototype.forEach.call($(pair[0]).querySelectorAll("button"),function(b){
       b.setAttribute("aria-pressed",String(b.dataset.v===P[pair[1]]));});
+  });
+  [["segGrid","grid"],["segCap","cap_top"]].forEach(function(pair){
+    Array.prototype.forEach.call($(pair[0]).querySelectorAll("button"),function(b){
+      b.setAttribute("aria-pressed",String((b.dataset.v==="on")===P[pair[1]]));});
   });
 }
 
